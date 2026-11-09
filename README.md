@@ -168,18 +168,21 @@ studio project new NAME | ls
 studio timeline show P [--json]   # the story, with its rev; --json clips carry index (0-based)
                                   #   and number (1-based), moment, and the effective fit
 studio timeline add P MEDIA[@N] | add P MEDIA IN OUT [--at N]   # @N = moment N (remembered
-                                  #   on the clip); --at N = insert as clip N
-studio timeline trim P CLIP IN OUT       # CLIP = number (1-based) or clip id/prefix
+                                  #   on the clip, snapped to speech; --no-snap keeps its times);
+                                  #   --at N = insert as clip N; --snap = onto speech edges
+studio timeline trim P CLIP IN OUT [--snap]   # CLIP = number (1-based) or clip id/prefix
+studio timeline snap P CLIP|all          # spoken in/out points onto speech edges (below)
 studio timeline split P CLIP AT          # AT = seconds into the clip
 studio timeline fit P CLIP fill|fit|auto # crop to fill / show everything / footage default
 studio timeline move P CLIP TO | rm P CLIP | label P CLIP TEXT | clear P | set P FILE|-
                                   # TO = the clip's new number
    --base REV    refuse (exit 3) if the story changed since `show` printed rev REV
    --aspect 9:16|16:9|1:1|4:5   --captions on|off
-studio render P                   # export; the UI shows it under "Your videos"
+studio render P                   # export (loudness -14 LUFS); the UI shows it under "Your videos"
+studio check P [EXPORT] [--json]  # measure the export against QUALITY.md; review sheet; exit 1 on a fail
 studio moments|draft|cut ID… | --all     # AI steps (moments and draft call the agent). A bare
                                   # `studio moments` refuses instead of running every file.
-studio proxy|transcribe|keyframes ID… | --all
+studio proxy|speech|transcribe|keyframes ID… | --all   # speech: where someone talks (below)
 studio bundle OUT_DIR -p P [-p P2 …] | --all [--zip]   # share with a teammate (below)
 studio import BUNDLE_DIR [--no-previews]               # bring a teammate's bundle in
 studio log [-n N]
@@ -196,6 +199,53 @@ bad file never stops the rest.
 The timeline verbs fail loudly. `trim` with OUT ≤ IN exits 1 and leaves the clip alone.
 Clamping to the media's length prints a `warning:` to stderr. A `set` or `add` that would
 drop a clip (audio-only media, unknown id, zero length) exits 2 and gives the reason.
+
+## Quality: speech edges and `studio check`
+
+[QUALITY.md](QUALITY.md) is the bar every reel clears: hard rules that are measured and
+judgment rules the agent answers. The moments prompt carries it, so the agent picks fewer,
+complete beats (and may pick none). Three things hold the hard rules:
+
+- **Speech regions.** Whisper's word times run ~150 ms early and snap to whole seconds near the
+  end of a sentence, so cutting on them clips the last word. The `speech` step runs Silero VAD
+  (`whisper-vad-speech-segments`, whisper.cpp's port) on each file at ingest and writes
+  `media/<id>/speech.json`: where someone is really talking. Older media get it on first use,
+  or all at once with `studio speech --all` (no re-transcribing). The model,
+  `ggml-silero-v6.2.0.bin` (885 KB), is pinned by the flake (`fetchurl`, sha256) and reaches
+  studio as `STUDIO_VAD_MODEL`; without nix it is downloaded once into
+  `~/.local/share/studio/models/` and checked against the same sha256.
+- **Snapping.** A spoken clip starts 0.07 s before its first word and ends 0.26 s after its
+  last, never inside a word: a cut point inside speech moves to that phrase's edge, dead air
+  at either end goes. Moments are snapped when they're found, `timeline add MEDIA@N` keeps
+  them snapped, and `--snap` (add, trim, set) or `timeline snap P CLIP|all` does it for any
+  clip. A clip with no speech in it (a silent shot) is left alone, and the operator's own
+  trims in the UI are never snapped. Every part of an export gets a 20 ms audio fade in and
+  out, so cuts don't click, and `render` normalizes loudness to −14 LUFS, true peak −1 dBTP
+  (two-pass `loudnorm`, video copied).
+- **Transcription only hears speech.** whisper-cli runs with `--vad` (the same Silero
+  settings), `-sns` (no non-speech tokens) and `-mc 0` (no carried-over text; the vocabulary
+  prompt is still carried). A file with no speech gets an empty transcript instead of an
+  invented "Thank you.", and stock phrases ("Thanks for watching", "Subscribe", subtitle
+  credits) are dropped wherever they appear. whisper-cli maps segment times back from its
+  shortened audio but not token times; studio rebuilds whisper.cpp's map from the same regions
+  so every word lands where it was said, and never runs past its speech region.
+
+`studio check P` measures the latest export (or `studio check P path/to.mp4`): every spoken
+in/out point against the speech (lead-in 0.05–0.15 s, tail ≥ 0.25 s, never inside speech,
+spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 0.35 s, VAD on the
+export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
+frozen picture (`blackdetect`, `freezedetect`), captions against a fresh transcription of the
+export (≥ 80% of words agree), and the last word (not filler). A clip labelled "payoff",
+"reveal", "hold" or "still" may hold a pause or a still picture on purpose. It writes a review
+sheet next to the export, `exports/<name>.check/`: `cut-NN-….png` for the start, every cut and
+the end (12 frames, the waveform with speech in green, the words heard, a red line at the cut,
+1.5 s either side) and `contact.png` (24 frames of the whole export), plus `check.json`. It
+logs `check.done`, prints QUALITY.md's judgment rules as a checklist, and exits 1 if any hard
+rule fails. The agent's loop (AGENTS.md): render, check, look at the sheet, fix and re-render
+up to three times, answer the judgment rules, and only then tell the operator.
+
+Still measured by eye: captions clear of the platform's buttons, and fades are made by
+construction (not measured).
 
 ## Using it with your agent
 
@@ -258,7 +308,8 @@ Knobs: `STUDIO_HW=0` (libx264 fallback), `STUDIO_HWDEC=0|force`, `STUDIO_PROXY_Q
 `STUDIO_WHISPER_THREADS` (8), `STUDIO_WHISPER_BEAM` (1),
 `STUDIO_WHISPER_NST` (0.6, whisper's `--no-speech-thold`), `STUDIO_SETTLE_SECS` (3),
 `STUDIO_UPLOAD_STALL_SECS` (120: an upload that sends nothing for this long is dropped),
-`STUDIO_WHISPER_MODEL` (default `~/.local/share/studio/models/ggml-large-v3-turbo.bin`).
+`STUDIO_WHISPER_MODEL` (default `~/.local/share/studio/models/ggml-large-v3-turbo.bin`),
+`STUDIO_VAD_MODEL` (the Silero model; the flake sets it, see [Quality](#quality-speech-edges-and-studio-check)).
 The agent's knobs are under [Using it with your agent](#using-it-with-your-agent).
 
 ## Words: vocabulary and fixes
@@ -334,7 +385,12 @@ the broken line is skipped with a warning and the next event is kept.
 `test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|bench]` runs:
 - fixtures, cached in `~/.cache/studio-fixtures`. They include `iphone-hdr.mov`, a 4K HEVC
   10-bit HLG file like the iPhone default.
-- CLI and API tests.
+- CLI and API tests. The quality tests run on two more fixtures whose speech is known by
+  construction: `bursts.mov` (three sentences with set silences between them and a black
+  stretch, spans in `bursts.json`) and `broll-roomtone.mov` (picture over room tone). They
+  check speech regions, snapping, the empty transcript for b-roll, render loudness, and that
+  `studio check` catches a cut inside speech, a long pause, wrong loudness, black picture and
+  captions nobody says.
 - The agent adapters: moments and draft through fakes that speak each CLI's surface
   (`test/fakebin/claude`, `test/fakeagents/codex`, `test/fakeagents/goose`) and through a
   custom `STUDIO_AGENT_CMD` (`test/fakebin/fake-agent`).

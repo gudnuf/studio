@@ -42,20 +42,43 @@ studio words ID --grep privacy    # word timings: "start on the word privacy"
 studio media show ID              # one file's moments (n, in-out, title, hook)
 studio posts ID [--json]          # post drafts, with the operator's rewrites applied
 
-studio timeline trim P CLIP IN OUT --base REV    # CLIP = id (or 1-based number)
-studio timeline add P MEDIA@N --base REV         # moment N of MEDIA as a new clip
-studio timeline add P MEDIA IN OUT [--at N] --base REV
+studio timeline trim P CLIP IN OUT [--snap] --base REV   # CLIP = id (or 1-based number)
+studio timeline add P MEDIA@N --base REV         # moment N of MEDIA as a new clip (on speech edges)
+studio timeline add P MEDIA IN OUT [--at N] [--snap] --base REV
+studio timeline snap P CLIP|all --base REV       # spoken in/out points onto speech edges
 studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
 studio timeline fit P CLIP fill|fit|auto         # crop to fill / show the whole frame
 studio words ID --fix WRONG RIGHT [--all]        # fix a misheard word (captions follow)
 studio render P                                  # export; it shows under "Your videos"
+studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
 
 studio say "Trimmed clip 2 to start on 'privacy'." --re NOTE_ID
 ```
 
-IN and OUT are seconds in the source media; split's AT is seconds into the clip.
+IN and OUT are seconds in the source media; split's AT is seconds into the clip. Cut on
+speech, not on Whisper's word times (they run early): `--snap` puts a spoken clip's in point
+just before its first word and its out point a quarter second after its last, never inside a
+word. Moments are snapped already. Don't snap the operator's own trims unless they ask.
 `studio notes --ack NOTE_ID` marks a note seen
 without replying. `studio log -n 20` shows the latest events from both of you.
+
+## Before you say a reel is done
+
+[QUALITY.md](QUALITY.md) is the bar. Read it before you build a story. Then, every time:
+
+1. `studio render P`, then `studio check P`. It measures the export against the hard rules
+   (cuts on speech edges, first word, pauses, length, loudness, black or frozen picture,
+   captions against what the export really says, the last word) and exits 1 if one fails.
+2. **Look at the review sheet** it prints the path of: `cut-*.png` (frames, waveform, speech
+   and the words heard, 1.5s either side of every cut) and `contact.png` (the whole export).
+3. A FAIL: fix it (`timeline snap`, trim, split a long pause out, drop the beat), render and
+   check again. Up to 3 rounds. Still failing: tell the operator what fails and what to shoot.
+4. Answer every judgment rule `check` lists, honestly, one line each. Any "no" sends the reel
+   back, or kills it.
+5. Only then tell the operator it's done, with what check measured and your answers.
+
+A held shot or pause that is meant (a payoff, a reveal) is labelled so: a clip label with
+"payoff", "reveal", "hold" or "still" in it lets `check` pass its pause or still picture.
 
 ## AI steps
 
