@@ -4,7 +4,7 @@
   studio ui                                start the desktop studio (http://127.0.0.1:7317)
   studio run   [-p project] [--brand jefe] [files...]   ingest inbox (or files), run every step
   studio ingest [-p project] [files...]    move footage from inbox/ into the library
-  studio proxy|transcribe|keyframes|moments|cut|draft ID... | --all [--force]   run one step
+  studio proxy|speech|transcribe|keyframes|moments|cut|draft ID... | --all [--force]   one step
                                            (moments and draft call your agent: see below)
   studio media show ID                     one file: steps, moments (n, times, title, hook)
   studio words ID [--from T --to T] [--grep WORD]   transcript words with timings
@@ -46,7 +46,7 @@ MODEL = Path(os.environ.get("STUDIO_WHISPER_MODEL",
              Path.home() / ".local/share/studio/models/ggml-large-v3-turbo.bin"))
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".webm", ".avi"}
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".ogg", ".flac"}
-LOCAL_STEPS = ["proxy", "transcribe", "keyframes"]       # cheap, on-device, run at ingest
+LOCAL_STEPS = ["proxy", "speech", "transcribe", "keyframes"]   # cheap, on-device, at ingest
 AI_STEPS = ["moments", "cut", "draft"]                    # call the agent, run on request
 STEPS = LOCAL_STEPS + AI_STEPS
 ASPECTS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080), "4:5": (1080, 1350)}
@@ -1068,7 +1068,173 @@ def proxy(item):
     return {"file": "proxy.mp4", "sha256": receipt(out), "chunks": len(plan),
             "encoder": "videotoolbox" if hw()["enc"] else "libx264"}
 
+# ---------- speech: where someone is talking (Silero VAD) ----------------------
+# Whisper's word times run ~150 ms early and snap to whole seconds near sentence ends, so
+# cutting on them clips the last word. Silero VAD (whisper.cpp's ggml port, run by
+# whisper-vad-speech-segments) says where speech really is: media/<id>/speech.json holds those
+# regions, cuts snap to them, whisper only hears them, and `studio check` measures against them.
+
+VAD_MODEL_NAME = "ggml-silero-v6.2.0.bin"
+VAD_MODEL_URL = ("https://huggingface.co/ggml-org/whisper-vad/resolve/"
+                 "9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin")
+VAD_MODEL_SHA256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+# whisper-cli's own --vad defaults, spelt out and passed to both tools: the regions in
+# speech.json are then exactly the ones whisper hears, which the token-time map relies on.
+VAD_ARGS = ["-vt", "0.5", "-vspd", "250", "-vsd", "100", "-vp", "30", "-vo", "0.1"]
+
+def vad_model():
+    """The Silero model: $STUDIO_VAD_MODEL (the flake sets it to a pinned store path), else
+    ~/.local/share/studio/models/, downloaded there once and checked against its sha256."""
+    env = os.environ.get("STUDIO_VAD_MODEL")
+    if env and Path(env).is_file():
+        return Path(env)
+    p = MODEL.parent / VAD_MODEL_NAME
+    if p.is_file():
+        return p
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}")
+    try:
+        import urllib.request
+        with urllib.request.urlopen(VAD_MODEL_URL, timeout=60) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+        if receipt(tmp) != VAD_MODEL_SHA256:
+            raise RuntimeError("the download doesn't match its pinned sha256")
+        os.replace(tmp, p)
+    except Exception as e:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"VAD model missing at {p} and the download failed ({e}); fetch "
+                           f"{VAD_MODEL_URL} there (sha256 {VAD_MODEL_SHA256}) or run in `nix develop`")
+    return p
+
+def vad_regions(wav):
+    """Speech regions [[start, end], ...] (seconds, 10 ms steps) of a 16 kHz mono WAV."""
+    need("whisper-vad-speech-segments")
+    out = sh(["whisper-vad-speech-segments", "-f", str(wav), "-vm", str(vad_model()),
+              *VAD_ARGS, "-np"])
+    return [[round(float(a) / 100, 2), round(float(b) / 100, 2)]
+            for a, b in re.findall(r"start = ([\d.]+), end = ([\d.]+)", out)]
+
+def speech_file(mid):
+    return mdir(mid) / "speech.json"
+
+def write_speech(mid, regions, duration=None):
+    out = speech_file(mid)
+    tmp = out.with_name(f".speech.{os.getpid()}.json")
+    tmp.write_text(json.dumps({"model": VAD_MODEL_NAME, "args": VAD_ARGS, "duration": duration,
+                               "regions": regions}, indent=1))
+    os.replace(tmp, out)
+
+def speech_regions(mid):
+    """speech.json's regions, or None if this file has none yet (or they came from other
+    VAD settings)."""
+    sp = load_json_cached(speech_file(mid), None)
+    if not sp or sp.get("model") != VAD_MODEL_NAME or sp.get("args") != VAD_ARGS:
+        return None
+    return sp.get("regions") or []
+
+def speech(item):
+    """The speech step: speech.json for one file. Cheap (CPU, ~25x realtime), so it also
+    backfills media transcribed before it existed (`studio speech --all`)."""
+    if not item["has_audio"]:
+        return {"regions": 0, "skipped": "no audio track"}
+    need("ffmpeg")
+    wav = audio_wav(item)
+    regs = vad_regions(wav)
+    write_speech(item["id"], regs, item.get("duration"))
+    if "transcribe" in item["steps"]:          # nothing left to use the WAV
+        wav.unlink(missing_ok=True)
+    return {"regions": len(regs), "speech_s": round(sum(b - a for a, b in regs), 2),
+            "sha256": receipt(speech_file(item["id"]))}
+
+def ensure_speech(mid):
+    """speech_regions(mid), running the speech step first if it's missing (older media)."""
+    regs = speech_regions(mid)
+    if regs is None and library().get(mid, {}).get("has_audio"):
+        run_step("speech", [mid], force=True, quiet=True)
+        regs = speech_regions(mid)
+    return regs
+
+def vad_time_map(regions, n_samples, rate=16000):
+    """whisper-cli --vad decodes a shortened file: each speech region, plus 0.1 s of the audio
+    after it, then 0.1 s of silence, and so on. It maps *segment* times back to the original
+    file but not token times, so a word lands seconds early. This rebuilds whisper.cpp's map
+    (whisper_vad(): same sample rounding) from the same regions. Returns map(t_ms, end) ->
+    seconds: a time in the overlap or the inserted silence goes to the speech edge (the end
+    of the region before it for an end, the start of the next one for a start)."""
+    cs = [(round(a * 100), round(b * 100)) for a, b in regions]
+    s2cs = lambda s: int(s / rate * 100 + 0.5)
+    c2s = lambda c: int(c / 100 * rate + 0.5)
+    blocks, off = [], 0                    # (vad_start, vad_end, orig_start, orig_end) in cs
+    for i, (a, b) in enumerate(cs):
+        s0, s1 = min(c2s(a), n_samples - 1), min(c2s(b), n_samples - 1)
+        ln = s1 - s0
+        if i < len(cs) - 1:
+            s1 = min(s1 + int(0.1 * rate), n_samples - 1)
+        if s1 - s0 <= 0:
+            continue
+        blocks.append((s2cs(off), s2cs(off + ln), a, b))
+        off += (s1 - s0) + (int(0.1 * rate) if i < len(cs) - 1 else 0)
+    starts = [x[0] for x in blocks]
+
+    def fn(t_ms, end=False):
+        t = t_ms / 10
+        if not blocks:
+            return t / 100
+        i = max(0, bisect.bisect_right(starts, t) - 1)
+        v0, v1, o0, o1 = blocks[i]
+        if t <= v0:
+            return o0 / 100
+        if t <= v1:
+            return (o0 + (t - v0) * (o1 - o0) / max(1, v1 - v0)) / 100
+        if end or i + 1 >= len(blocks):
+            return o1 / 100
+        return blocks[i + 1][2] / 100
+    return fn
+
+def wav_samples(wav):
+    import wave
+    with wave.open(str(wav)) as w:
+        return w.getnframes()
+
+
+# ---------- transcribe ------------------------------------------------------
+
 WHISPER_NST = os.environ.get("STUDIO_WHISPER_NST", "0.6")    # --no-speech-thold
+
+def run_whisper(wav, base, vocab, regions, prog=None):
+    """whisper-cli on a 16 kHz WAV, hearing only the speech regions: --vad with the same
+    Silero settings, non-speech tokens suppressed (-sns) and no carried-over text (-mc 0;
+    the vocabulary prompt is still carried). Returns (language, segments, words), word
+    times on the WAV's own timeline. No regions: no speech, so whisper isn't run at all."""
+    if not regions:
+        return None, [], []
+    # Metal does the heavy lifting; -t feeds the CPU-side decoder. Greedy decoding (with
+    # whisper's temperature fallback still on) measured as accurate as beam 5 and ~12% faster.
+    # Not --dtw: it needs -nfa, cost +75% here, and its token times are VAD-shifted too.
+    cmd = ["whisper-cli", "-m", str(MODEL), "-f", str(wav), "-l", "auto", "-oj", "-ojf",
+           "-of", str(base), "-np", "-pp", "-t", str(WHISPER_THREADS),
+           "-bs", str(WHISPER_BEAM), "-bo", str(max(WHISPER_BEAM, 1)), "-nth", WHISPER_NST,
+           "--vad", "-vm", str(vad_model()), *VAD_ARGS, "-sns", "-mc", "0"]
+    if vocab:   # the brand's own words, so "Jefe" isn't heard as "Hefe"
+        cmd += ["--prompt", ", ".join(vocab) + ".", "--carry-initial-prompt"]
+    tail = []
+    with subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                          errors="replace") as p:
+        for line in p.stderr:
+            mm = re.search(r"progress\s*=\s*(\d+)%", line)
+            if mm:
+                if prog:
+                    prog.update(None, int(mm.group(1)) / 100)
+            else:
+                tail = (tail + [line])[-40:]
+        p.wait()
+    if p.returncode != 0:
+        raise RuntimeError(f"whisper-cli failed ({p.returncode}):\n{''.join(tail)[-2000:]}")
+    raw_path = Path(f"{base}.json")
+    raw = json.loads(raw_path.read_text(errors="replace"))
+    raw_path.unlink(missing_ok=True)      # parsed; transcript.json is the record
+    segments, words = whisper_words(raw, vad_time_map(regions, wav_samples(wav)), regions)
+    return raw.get("result", {}).get("language"), segments, words
 
 def transcribe(item):
     d = mdir(item["id"])
@@ -1078,44 +1244,30 @@ def transcribe(item):
     if not MODEL.exists():
         raise RuntimeError(f"whisper model missing at {MODEL}")
     wav = audio_wav(item)
-    base = d / "whisper"
+    regions = speech_regions(item["id"])
+    if regions is None:                    # the speech step hasn't run: same regions, now
+        regions = vad_regions(wav)
+        write_speech(item["id"], regions, item.get("duration"))
     vocab, fixes = brand_words(item.get("brand"))
-    # Metal does the heavy lifting; -t feeds the CPU-side decoder. Greedy decoding (with
-    # whisper's temperature fallback still on) measured as accurate as beam 5 and ~12% faster.
-    cmd = ["whisper-cli", "-m", str(MODEL), "-f", str(wav), "-l", "auto", "-oj", "-ojf",
-           "-of", str(base), "-np", "-pp", "-t", str(WHISPER_THREADS),
-           "-bs", str(WHISPER_BEAM), "-bo", str(max(WHISPER_BEAM, 1)), "-nth", WHISPER_NST]
-    if vocab:   # the brand's own words, so "Jefe" isn't heard as "Hefe"
-        cmd += ["--prompt", ", ".join(vocab) + "."]
-    prog = Progress("transcribe", item["id"])
-    tail = []
-    with subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                          errors="replace") as p:
-        for line in p.stderr:
-            mm = re.search(r"progress\s*=\s*(\d+)%", line)
-            if mm:
-                prog.update(None, int(mm.group(1)) / 100)
-            else:
-                tail = (tail + [line])[-40:]
-        p.wait()
-    if p.returncode != 0:
-        raise RuntimeError(f"whisper-cli failed ({p.returncode}):\n{''.join(tail)[-2000:]}")
-    raw_path = Path(f"{base}.json")
-    raw = json.loads(raw_path.read_text(errors="replace"))
-    segments, words = whisper_words(raw)
+    language, segments, words = run_whisper(wav, d / "whisper", vocab, regions,
+                                            Progress("transcribe", item["id"]))
     segments, words, dropped = drop_hallucinations(segments, words, wav)
     fixed = apply_fixes(segments, words, fixes + case_fixes(vocab))
-    write_transcript(d, raw.get("result", {}).get("language"), segments, words)
-    raw_path.unlink(missing_ok=True)      # parsed; transcript.json is the record
+    write_transcript(d, language, segments, words)
     wav.unlink(missing_ok=True)
     return {"words": len(words), "segments": len(segments), "fixed": fixed, "dropped": dropped,
-            "sha256": receipt(d / "transcript.json")}
+            "speech": len(regions), "sha256": receipt(d / "transcript.json")}
 
-def whisper_words(raw):
+def whisper_words(raw, tmap=None, regions=None):
     """whisper-cli -ojf JSON -> (segments, words). Each word is the run of tokens from one
     space-led token to the next. Whisper often gives a segment's first word zero length (its
-    end is its start); it gets its real span (to the next word) here, or captions skip it."""
+    end is its start); it gets its real span (to the next word, never past the end of its
+    speech region) here, or captions skip it. tmap: vad_time_map() for --vad token times."""
     segments, words = [], []
+    starts = [a for a, _ in regions or []]
+    def region_end(t):     # where whisper stopped hearing the region t is in: its end + the
+        j = bisect.bisect_right(starts, t + 1e-3) - 1          # 0.1 s --vad adds (-vo 0.1)
+        return regions[j][1] + 0.1 if j >= 0 and t <= regions[j][1] + 0.1 else None
     for seg in raw.get("transcription", []):
         text = seg["text"].strip()
         if not text:
@@ -1128,23 +1280,41 @@ def whisper_words(raw):
             t = tok.get("text", "")
             if t.startswith("[_") or t.startswith("<|"):
                 continue
-            a, b = tok["offsets"]["from"] / 1000, tok["offsets"]["to"] / 1000
+            o = tok["offsets"]
+            a, b = (tmap(o["from"]), tmap(o["to"], end=True)) if tmap else (o["from"] / 1000, o["to"] / 1000)
+            b = max(a, b)
             if t.startswith(" ") or cur is None:
-                cur = {"w": t.strip(), "start": a, "end": b, "_seg": si}
+                cur = {"w": t.strip(), "start": round(a, 3), "end": round(b, 3), "_seg": si}
                 mine.append(cur)
             else:
                 cur["w"] += t
-                cur["end"] = b
+                cur["end"] = round(max(cur["end"], b), 3)
         mine = [w for w in mine if w["w"]]
         for k, w in enumerate(mine):
+            # a word never runs past its speech region, across a silence whisper never heard
+            # (its last token can end a hair into the next region of the shortened audio)
+            cap = region_end(w["start"]) if regions else None
+            if cap is not None:
+                w["end"] = round(max(w["start"], min(w["end"], cap)), 3)
             if w["end"] - w["start"] < 0.01:
                 nxt = mine[k + 1]["start"] if k + 1 < len(mine) else s1
-                w["end"] = round(min(max(nxt, w["start"]), w["start"] + 1.0), 3)
+                lim = w["start"] + 1.0 if cap is None else min(w["start"] + 1.0, cap)
+                w["end"] = round(max(w["start"], min(nxt, lim)), 3)
         words += mine
     return segments, words
 
 HALLUCINATIONS = {"thank you", "thank you very much", "thanks for watching",
                   "thank you for watching", "thanks", "you", "bye", "bye bye"}
+# Whisper's stock inventions (the "bag of hallucinations": YouTube outros and subtitle
+# credits from its training data). A segment that is only one of these goes, wherever it is.
+HALLUCINATION_PHRASES = {"thanks for watching", "thank you for watching", "thank you so much for watching",
+                         "thanks for watching and see you next time", "please subscribe", "subscribe",
+                         "like and subscribe", "please like and subscribe", "don't forget to subscribe",
+                         "subscribe to my channel", "please subscribe to my channel",
+                         "see you in the next video", "see you next time",
+                         "thank you for listening", "thanks for listening"}
+HALLUCINATION_RE = re.compile(r"amara\.org|subtitles? by|captions? by|transcri(bed|ption) by"
+                              r"|castingwords|www\.\w+\.(com|org)", re.I)
 
 def _norm(text):
     return re.sub(r"[^a-z' ]+", "", text.lower()).strip()
@@ -1167,11 +1337,14 @@ def _rms(wav, a, b):
 def drop_hallucinations(segments, words, wav=None):
     """Whisper's two usual inventions: words with no length that sit alone (nothing real
     around them), and a lone "Thank you." (or similar) in a quiet tail after the speech.
-    Returns (segments, words, dropped_texts)."""
+    Returns (segments, words, dropped_texts). Also drops any segment that is only a stock
+    phrase (HALLUCINATION_PHRASES) or a subtitle credit, wherever it is."""
     dropped, kill = [], set()
     for si, s in enumerate(segments):
         ws = [w for w in words if w.get("_seg") == si]
         if ws and all(w["end"] - w["start"] < 0.01 for w in ws) and s["end"] - s["start"] < 0.05:
+            kill.add(si)
+        elif _norm(s["text"]) in HALLUCINATION_PHRASES or HALLUCINATION_RE.search(s["text"]):
             kill.add(si)
     # a stock phrase as the very last segment, in (near) silence or after a long gap
     for si in range(len(segments) - 1, -1, -1):
@@ -1568,7 +1741,7 @@ def draft(item):
     out.write_text(json.dumps(drafts, indent=1))
     return {"posts": len(drafts.get("posts", [])), "sha256": receipt(out)}
 
-STEP_FN = {"proxy": proxy, "transcribe": transcribe, "keyframes": keyframes,
+STEP_FN = {"proxy": proxy, "speech": speech, "transcribe": transcribe, "keyframes": keyframes,
            "moments": moments, "cut": cut, "draft": draft}
 STEP_NEEDS = {"cut": "moments", "draft": "moments"}
 
@@ -1610,12 +1783,12 @@ def _run_one(step, mid, force, quiet):
 # Each step runs in the lane of the hardware it saturates, so a long transcription never
 # holds up a proxy for a file that was just dropped in:
 #   media   ffmpeg / VideoToolbox (proxy, keyframes, cut)   STUDIO_MEDIA_LANE (2)
-#   whisper Metal GPU, one at a time (transcribe)            1
+#   whisper Metal GPU, one at a time (speech, transcribe)    1
 #   ai      agent calls (moments, draft)                     STUDIO_AI_LANE (3)
-# Per file: proxy -> keyframes runs alongside transcribe; moments waits for both; then cut
+# Per file: proxy -> keyframes runs alongside speech -> transcribe; moments waits for both; then cut
 # and draft run side by side.
 
-STEP_LANE = {"proxy": "media", "keyframes": "media", "cut": "media",
+STEP_LANE = {"proxy": "media", "keyframes": "media", "cut": "media", "speech": "whisper",
              "transcribe": "whisper", "moments": "ai", "draft": "ai"}
 
 class Lane:
@@ -1716,9 +1889,9 @@ def run_pipeline(ids, steps, force=False, quiet=False, lanes=None, on_lane=None)
     def go(step, mid):
         if step not in want and not (step == "moments" and {"cut", "draft"} & set(want)):
             return
-        if step == "transcribe":          # WAV extraction outside the whisper slot
+        if step in ("speech", "transcribe"):   # WAV extraction outside the whisper slot
             it = library().get(mid)
-            if it and it.get("has_audio") and (force or "transcribe" not in it["steps"]):
+            if it and it.get("has_audio") and (force or step not in it["steps"]):
                 need("ffmpeg")
                 try:
                     audio_wav(it)
@@ -1741,7 +1914,7 @@ def run_pipeline(ids, steps, force=False, quiet=False, lanes=None, on_lane=None)
 
     def one(mid):
         parallel(lambda: (go("proxy", mid), go("keyframes", mid)),
-                 lambda: go("transcribe", mid))
+                 lambda: (go("speech", mid), go("transcribe", mid)))
         go("moments", mid)
         parallel(lambda: go("cut", mid), lambda: go("draft", mid))
 
@@ -1823,6 +1996,7 @@ _BUNDLE_MAX_META = 50 << 20            # "small metadata": a file bigger than th
 # clips), and old failures that would only confuse the teammate
 _BUNDLE_DROP = {"step.proxy", "step.cut", "step.failed"}
 _STEP_FILE = {"step.transcribe": "transcript.json", "step.keyframes": "keyframes/index.json",
+              "step.speech": "speech.json",
               "step.moments": "moments.json", "step.draft": "drafts.json"}
 _MEDIA_EVENTS = {"ingested", "brand.set", "transcript.edited", "draft.edited"}
 BIG_ZIP = 15 * 10**9

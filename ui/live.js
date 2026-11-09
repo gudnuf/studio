@@ -129,7 +129,7 @@ const JOB_WORDS = {
   steps: j => {
     const s = (j.steps || []).join(', ');
     const ids = j.ids || [], n = ids.length;
-    const words = { moments: 'Finding moments', draft: 'Writing posts', transcribe: 'Writing out the words', proxy: 'Making previews', keyframes: 'Grabbing frames', cut: 'Cutting clips' };
+    const words = { moments: 'Finding moments', draft: 'Writing posts', transcribe: 'Writing out the words', speech: 'Finding the speech', proxy: 'Making previews', keyframes: 'Grabbing frames', cut: 'Cutting clips' };
     const done = ids.filter(id => { const m = S.server?.media?.[id]; return m && ((j.steps || []).every(x => m.steps?.[x]) || (j.steps || []).includes(m.error?.step)); }).length;
     return (j.steps || []).map(x => words[x] || x).join(' + ') + (n > 1 ? ` · ${done} of ${n} files done` : '') || s;
   },
