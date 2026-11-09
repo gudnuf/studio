@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio</title>
+<link rel="stylesheet" href="/ui/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23f0a43a'/><path d='M12 9l12 7-12 7z' fill='%23151515'/></svg>">
+<script type="module" src="/ui/app.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== Top bar ===== -->
+  <header id="topbar">
+    <div class="tb-left">
+      <div class="brandmark" data-tip="Studio: footage in, posts out">S</div>
+      <div class="project-switch">
+        <select id="project-select" data-tip="Switch project"></select>
+        <button id="btn-new-project" class="btn ghost sm" data-tip="Start a new project">+ New</button>
+        <button id="btn-share" class="btn ghost sm" data-tip="Share projects with a teammate: the footage and everything done to it, in one folder">Share…</button>
+        <button id="btn-import" class="btn ghost sm" data-tip="Bring in footage a teammate shared with you">Import…</button>
+      </div>
+    </div>
+
+    <ol id="steps" class="steps" aria-label="Steps"></ol>
+
+    <div class="tb-right">
+      <div class="btn-group">
+        <button id="btn-undo" class="btn icon" data-tip="Undo (⌘Z)" aria-label="Undo">
+          <svg viewBox="0 0 20 20"><path d="M7 5L3 9l4 4M3 9h9a5 5 0 010 10h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="btn-redo" class="btn icon" data-tip="Redo (⇧⌘Z)" aria-label="Redo">
+          <svg viewBox="0 0 20 20"><path d="M13 5l4 4-4 4M17 9H8a5 5 0 000 10h2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="format-wrap">
+        <button id="btn-format" class="btn" data-tip="Format: the shape of your video for each app">
+          <span class="fmt-icon" id="fmt-icon"></span><span id="fmt-label">Format</span>
+          <svg class="caret" viewBox="0 0 10 10"><path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+        <div id="format-menu" class="menu" hidden></div>
+      </div>
+      <label class="toggle" data-tip="Show spoken words on screen, like Reels and TikTok">
+        <input type="checkbox" id="captions-toggle"><span class="track"><span class="knob"></span></span><span>Captions</span>
+      </label>
+      <span id="save-status" class="save-status" data-tip="Your story saves automatically">Saved</span>
+      <button id="btn-export" class="btn primary" data-tip="Make the final video file">Export</button>
+    </div>
+  </header>
+
+  <!-- ===== Left: media bin ===== -->
+  <aside id="bin" class="pane">
+    <div class="pane-head">
+      <h2>Footage</h2>
+      <div class="pane-actions">
+        <button id="btn-find-all" class="btn sm accent" hidden data-tip="Claude watches every file and picks the best parts, then drafts posts for them (a minute or two, all at once)">✦ Find moments</button>
+        <button id="btn-add-footage" class="btn sm" data-tip="Add video files (or drag them anywhere onto this window)">+ Add footage</button>
+        <input type="file" id="file-input" accept="video/*,audio/*,.mov,.mp4,.m4v" multiple hidden>
+      </div>
+    </div>
+    <div id="bin-list" class="bin-list"></div>
+    <div id="bin-lower" class="bin-lower">
+      <div id="exports" class="exports"></div>
+      <div id="moments" class="moments"></div>
+    </div>
+  </aside>
+
+  <!-- ===== Center: preview ===== -->
+  <main id="viewer">
+    <div id="stage-wrap" class="stage-wrap">
+      <div id="stage" class="stage">
+        <canvas id="stage-bg" class="stage-bg" width="48" height="85"></canvas>
+        <video id="vid-a" class="vid active" playsinline preload="auto"></video>
+        <video id="vid-b" class="vid" playsinline preload="auto"></video>
+        <div id="cap-overlay" class="cap-overlay"></div>
+        <div id="stage-empty" class="stage-empty"></div>
+        <div id="stage-wait" class="stage-wait" hidden><span class="spinner"></span><span>Getting the preview ready…</span></div>
+      </div>
+      <div id="stage-format-tag" class="stage-format-tag"></div>
+    </div>
+    <div id="transport" class="transport">
+      <div class="tp-left">
+        <span id="tp-time" class="tp-time">0:00.0</span><span class="tp-sep">/</span><span id="tp-total" class="tp-total">0:00.0</span>
+      </div>
+      <div class="tp-center">
+        <button id="tp-start" class="btn icon" data-tip="Go to start (Home)"><svg viewBox="0 0 20 20"><path d="M5 4v12M16 4L8 10l8 6z" fill="currentColor"/></svg></button>
+        <button id="tp-back" class="btn icon" data-tip="Back 1 second (⇧←)  ·  J"><svg viewBox="0 0 20 20"><path d="M10 4L3 10l7 6zM18 4l-7 6 7 6z" fill="currentColor"/></svg></button>
+        <button id="tp-play" class="btn icon play" data-tip="Play / pause (Space)"><svg viewBox="0 0 20 20" id="tp-play-icon"><path d="M6 4l11 6-11 6z" fill="currentColor"/></svg></button>
+        <button id="tp-fwd" class="btn icon" data-tip="Forward 1 second (⇧→)  ·  L"><svg viewBox="0 0 20 20"><path d="M10 4l7 6-7 6zM2 4l7 6-7 6z" fill="currentColor"/></svg></button>
+        <button id="tp-end" class="btn icon" data-tip="Go to end (End)"><svg viewBox="0 0 20 20"><path d="M15 4v12M4 4l8 6-8 6z" fill="currentColor"/></svg></button>
+      </div>
+      <div class="tp-right">
+        <span id="tp-rate" class="tp-rate" hidden>1×</span>
+        <button id="tp-mute" class="btn icon" data-tip="Sound on / off"><svg viewBox="0 0 20 20" id="tp-mute-icon"></svg></button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ===== Right: inspector ===== -->
+  <aside id="inspector" class="pane">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="clip" data-tip="The selected clip: trim it, split it, edit by words">Clip</button>
+      <button class="tab" data-tab="posts" data-tip="Post drafts written for this footage">Posts</button>
+      <button class="tab" data-tab="activity" data-tip="Who did what: you and Claude">Activity<span id="activity-dot" class="dot" hidden></span></button>
+      <button class="tab" data-tab="claude" data-tip="Leave Claude a note about what you're looking at">Tell Claude</button>
+    </nav>
+    <section id="tab-clip" class="tab-body active"></section>
+    <section id="tab-posts" class="tab-body"></section>
+    <section id="tab-activity" class="tab-body"></section>
+    <section id="tab-claude" class="tab-body"></section>
+  </aside>
+
+  <!-- ===== Bottom: story timeline ===== -->
+  <section id="story" class="story">
+    <div class="story-head">
+      <h2>Story</h2>
+      <span id="story-meta" class="story-meta"></span>
+      <div class="story-tools">
+        <button id="btn-split" class="btn sm" data-tip="Cut the clip in two at the playhead (S)">Split</button>
+        <button id="btn-delete" class="btn sm" data-tip="Remove the selected clip (Delete). Undo brings it back.">Remove</button>
+        <span class="divider"></span>
+        <button id="btn-zoom-out" class="btn icon sm" data-tip="Zoom out (⌘ + scroll)">−</button>
+        <input type="range" id="zoom" min="0" max="1000" value="400" data-tip="Zoom the story in or out">
+        <button id="btn-zoom-in" class="btn icon sm" data-tip="Zoom in (⌘ + scroll)">+</button>
+        <button id="btn-fit" class="btn sm" data-tip="Fit the whole story in view (Z)">Fit</button>
+      </div>
+    </div>
+    <div id="tl-scroll" class="tl-scroll">
+      <div id="tl-content" class="tl-content">
+        <div id="tl-ruler" class="tl-ruler"></div>
+        <div id="tl-track" class="tl-track"></div>
+        <div id="tl-insert" class="tl-insert" hidden></div>
+        <div id="tl-snap" class="tl-snap" hidden></div>
+        <div id="tl-playhead" class="tl-playhead"><div class="ph-head"></div><div class="ph-line"></div></div>
+      </div>
+      <div id="tl-empty" class="tl-empty"></div>
+    </div>
+  </section>
+
+  <!-- ===== Footer ===== -->
+  <footer id="footer">
+    <div class="ft-left">
+      <span id="conn" class="conn" data-tip="Live link to the studio. Claude's edits show up here instantly."><span class="conn-dot"></span><span id="conn-label">Connecting…</span></span>
+      <span id="jobs" class="jobs"></span>
+      <span id="health" class="health" hidden></span>
+    </div>
+    <div class="ft-right">
+      <span class="cli-label" data-tip="The same edit as a command. Claude uses these.">CLI</span>
+      <code id="cli-line" class="cli-line">studio timeline show</code>
+      <button id="btn-copy-cli" class="btn ghost xs" data-tip="Copy the command">Copy</button>
+    </div>
+  </footer>
+</div>
+
+<!-- overlays -->
+<div id="dropzone" class="dropzone" hidden>
+  <div class="dz-inner">
+    <svg viewBox="0 0 48 48"><path d="M24 32V10M15 19l9-9 9 9M8 30v8h32v-8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div class="dz-title">Drop to add footage</div>
+    <div class="dz-sub" id="dz-sub"></div>
+  </div>
+</div>
+<div id="uploads" class="uploads" hidden></div>
+<div id="toasts" class="toasts"></div>
+<div id="tooltip" class="tooltip" hidden></div>
+<div id="modal" class="modal" hidden><div class="modal-card" id="modal-card"></div></div>
+</body>
+</html>

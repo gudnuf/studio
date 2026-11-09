@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The Studio window: the splash (local) and the studio server's UI on loopback (remote). Only what the UI uses: events (menus, native drops) and the app's own commands.",
+  "windows": ["main"],
+  "local": true,
+  "remote": {
+    "urls": ["http://127.0.0.1:*"]
+  },
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-is-focused",
+    "allow-pick-footage",
+    "allow-pick-folder",
+    "allow-notify",
+    "allow-app-info"
+  ]
+}

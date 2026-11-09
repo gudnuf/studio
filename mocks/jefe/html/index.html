@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=393, initial-scale=1">
+<title>Jefe mock</title>
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+<div id="screen"></div>
+<script src="mock.js"></script>
+<script>
+  // Preview in a normal browser: index.html?scene=walk&t=6 (or &play=1).
+  // render.py calls JefeMock.boot(data, scene) itself and drives renderAt(t).
+  (function () {
+    const q = new URLSearchParams(location.search);
+    if (!q.get('scene')) return;
+    const s = document.createElement('script');
+    s.src = '../data/' + (q.get('data') || 'bmw-1602') + '.js';
+    s.onload = () => {
+      JefeMock.boot(window.JEFE_DATA, q.get('scene'));
+      if (q.get('play')) {
+        const t0 = performance.now();
+        const loop = () => { JefeMock.renderAt(((performance.now() - t0) / 1000) % JefeMock.duration()); requestAnimationFrame(loop); };
+        loop();
+      } else JefeMock.renderAt(parseFloat(q.get('t') || '0'));
+    };
+    document.head.appendChild(s);
+  })();
+</script>
+</body>
+</html>

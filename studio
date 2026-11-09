@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin launcher: puts the nix toolchain on PATH when it isn't already, then runs the CLI.
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if command -v whisper-cli >/dev/null && command -v ffmpeg >/dev/null; then
+  exec python3 "$here/studio.py" "$@"
+fi
+exec nix develop "$here" --quiet -c python3 "$here/studio.py" "$@" 2> >(grep -v "Git tree .* is dirty" >&2)

@@ -1,0 +1,114 @@
+window.JEFE_DATA = {
+  "_comment": "Jefe mock input. Each lineItem = one spoken line: board gets an ITEM row (work) + one PRICE row per material figure; the estimate gets one priced line per material and one labor line. rate=null => labor is an honest gap (NOT HEARD), never invented. Set rate (dollars/hour) to price it.",
+  "clock": "9:41",
+  "date": "2026-11-08",
+  "docNumber": "EST-0001",
+  "letterhead": {
+    "name": "",
+    "sub": ""
+  },
+  "site": "",
+  "summary": "Restoration: M20 engine rebuild, 325iS five-speed swap, bodywork and paint, undercarriage, and interior.",
+  "scope": "Rebuild an M20 engine from a 325iS with new pistons, rods, head gasket and bearings, and fit a 325iS five-speed manual transmission. Work, sandblast and paint the body, and redo the undercarriage: drive shaft, differential and suspension. Finish the interior with seats, dashboard and steering wheel, plus the touch-up items.",
+  "notes": [
+    {
+      "bucket": "scope_of_work",
+      "label": "Engine: M20 from a 325iS",
+      "detail": "Rebuild with pistons, rods, head gasket and bearings."
+    },
+    {
+      "bucket": "scope_of_work",
+      "label": "Transmission: 325iS 5-speed manual",
+      "detail": "Replaces the current transmission."
+    }
+  ],
+  "lineItems": [
+    {
+      "said": "rebuild this M20 motor from a 325IS. Pistons, rods, head gasket, bearings. It's going to be about $1200 in materials and 20 hours of work.",
+      "work": "Rebuild M20 motor from a 325iS, 20 hours",
+      "hours": 20,
+      "rate": null,
+      "laborTitle": "Labor, engine rebuild",
+      "materials": [
+        {
+          "spoken": "$1200 materials",
+          "title": "M20 engine rebuild, from 325iS",
+          "detail": "Pistons, rods, head gasket, bearings",
+          "qty": "",
+          "amount": 1200
+        }
+      ]
+    },
+    {
+      "said": "replace the transmission with a 325IS manual 5 speed and that's going to be a $800 transmission and about 6 hours of labor.",
+      "work": "325iS 5-speed manual transmission, 6 hours",
+      "hours": 6,
+      "rate": null,
+      "laborTitle": "Labor, transmission swap",
+      "materials": [
+        {
+          "spoken": "$800 transmission",
+          "title": "Transmission, 325iS 5-speed manual",
+          "detail": "Replaces the current transmission",
+          "qty": "× 1",
+          "amount": 800
+        }
+      ]
+    },
+    {
+      "said": "for the body it's going to need to be worked, sandblasted and painted. And the total labor on that will be about 40 hours of labor and $2500 in materials.",
+      "work": "Body: work, sandblast and paint, 40 hours",
+      "hours": 40,
+      "rate": null,
+      "laborTitle": "Labor, body",
+      "materials": [
+        {
+          "spoken": "$2500 body materials",
+          "title": "Body materials",
+          "detail": "Bodywork, sandblast and paint",
+          "qty": "",
+          "amount": 2500
+        }
+      ]
+    },
+    {
+      "said": "underneath the vehicle we have the drive shaft, we have the differential, all the suspension. And for undercarriage we're talking $3000 in materials and about 40 hours of labor",
+      "work": "Undercarriage, 40 hours",
+      "hours": 40,
+      "rate": null,
+      "laborTitle": "Labor, undercarriage",
+      "materials": [
+        {
+          "spoken": "$3000 undercarriage materials",
+          "title": "Undercarriage materials",
+          "detail": "Drive shaft, differential, suspension",
+          "qty": "",
+          "amount": 3000
+        }
+      ]
+    },
+    {
+      "said": "for all the touch up items and interior it's going to be $500 in seats. It's going to be $1200 in dashboard and steering wheel. And it's going to take me 65 hours to do the interior.",
+      "work": "Interior and touch-up items, 65 hours",
+      "hours": 65,
+      "rate": null,
+      "laborTitle": "Labor, interior and touch-up",
+      "materials": [
+        {
+          "spoken": "$500 seats",
+          "title": "Seats",
+          "detail": "Interior",
+          "qty": "",
+          "amount": 500
+        },
+        {
+          "spoken": "$1200 dashboard and steering wheel",
+          "title": "Dashboard and steering wheel",
+          "detail": "Interior",
+          "qty": "",
+          "amount": 1200
+        }
+      ]
+    }
+  ]
+};

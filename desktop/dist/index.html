@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Studio</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111113; color: #ecebe8;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none; cursor: default; }
+  main { height: 100%; display: grid; place-items: center; }
+  .card { text-align: center; max-width: 520px; padding: 24px; }
+  .mark { width: 30px; height: 52px; border: 4px solid #f0a43a; border-radius: 8px; margin: 0 auto 22px;
+    display: grid; place-items: center; }
+  .mark::after { content: ""; border-left: 14px solid #f0a43a; border-top: 9px solid transparent;
+    border-bottom: 9px solid transparent; margin-left: 4px; }
+  .busy .mark { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  p { color: #a1a0a6; margin: 0; }
+  .err h1 { color: #ff8a7a; }
+  pre { text-align: left; white-space: pre-wrap; font: 11.5px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    background: #1f1f23; border: 1px solid #2c2c31; border-radius: 8px; padding: 10px 12px; color: #a1a0a6;
+    max-height: 40vh; overflow: auto; -webkit-user-select: text; user-select: text; margin-top: 16px; }
+</style>
+</head>
+<body class="busy">
+<main><div class="card">
+  <div class="mark"></div>
+  <h1 id="title">Opening your studio…</h1>
+  <p id="sub">Starting the studio on this Mac.</p>
+  <pre id="detail" hidden></pre>
+</div></main>
+<script>
+  // The app replaces this page with the studio as soon as its server answers. Until then it
+  // reports progress (and, if the server can't start, why) through these two calls.
+  window.studioSplash = {
+    status(title, sub) {
+      document.getElementById('title').textContent = title;
+      document.getElementById('sub').textContent = sub || '';
+    },
+    error(title, sub, detail) {
+      document.body.classList.remove('busy');
+      document.body.classList.add('err');
+      this.status(title, sub);
+      const d = document.getElementById('detail');
+      if (detail) { d.textContent = detail; d.hidden = false; }
+    },
+  };
+</script>
+</body>
+</html>

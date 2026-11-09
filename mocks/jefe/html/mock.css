@@ -1,0 +1,27 @@
+/* Fonts bundled in the app (apps/ios/Sources/Theme/Fonts at origin/main). */
+@font-face { font-family: Barlow; src: url(fonts/Barlow-Regular.ttf); font-weight: 400; }
+@font-face { font-family: Barlow; src: url(fonts/Barlow-Medium.ttf); font-weight: 500; }
+@font-face { font-family: Barlow; src: url(fonts/Barlow-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: Barlow; src: url(fonts/Barlow-Bold.ttf); font-weight: 700; }
+@font-face { font-family: Barlow; src: url(fonts/Barlow-ExtraBold.ttf); font-weight: 800; }
+@font-face { font-family: BarlowSC; src: url(fonts/BarlowSemiCondensed-Medium.ttf); font-weight: 500; }
+@font-face { font-family: BarlowSC; src: url(fonts/BarlowSemiCondensed-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: Plex; src: url(fonts/IBMPlexMono-Regular.ttf); font-weight: 400; }
+@font-face { font-family: Plex; src: url(fonts/IBMPlexMono-Medium.ttf); font-weight: 500; }
+@font-face { font-family: Plex; src: url(fonts/IBMPlexMono-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: Serif4; src: url(fonts/SourceSerif4-SemiBold.ttf); font-weight: 600; }
+@font-face { font-family: Serif4; src: url(fonts/SourceSerif4-Bold.ttf); font-weight: 700; }
+
+html, body { margin: 0; padding: 0; background: #000; }
+#screen {
+  width: 393px; height: 852px; position: relative; overflow: hidden;
+  -webkit-font-smoothing: antialiased; color: #141412;
+  font-family: Barlow, sans-serif;
+}
+#screen * { box-sizing: border-box; }
+.abs { position: absolute; left: 0; top: 0; width: 393px; height: 852px; overflow: hidden; }
+.col { display: flex; flex-direction: column; }
+.row { display: flex; flex-direction: row; align-items: center; }
+.grow { flex: 1 1 auto; min-height: 0; }
+.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sys { font-family: -apple-system, "SF Pro Text", "SF Pro", system-ui, sans-serif; }
