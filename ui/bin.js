@@ -4,7 +4,7 @@ import { S, on, emit, focusMedia, mediaOf, projectMedia, project } from './store
 import * as api from './api.js';
 import { player } from './player.js';
 import { addClip, DND_TYPE } from './timeline.js';
-import { $, el, fmtT, fmtDur, toast, timeAgo, modal } from './util.js';
+import { $, el, fmtT, fmtDur, toast, timeAgo, modal, isAgent } from './util.js';
 import { native } from './native.js';
 import { refresh } from './live.js';
 
@@ -13,8 +13,8 @@ const STEP_TIP = {
   proxy: 'A light copy of the video for smooth playback here',
   transcribe: 'Every spoken word, with timing, written out on this computer',
   keyframes: 'Still frames for thumbnails',
-  moments: 'Claude’s picks for the best parts',
-  draft: 'Post captions Claude wrote for these moments',
+  moments: 'The agent’s picks for the best parts',
+  draft: 'Post captions the agent wrote for these moments',
 };
 const SHOW_STEPS = ['proxy', 'transcribe', 'keyframes', 'moments', 'draft'];
 
@@ -50,15 +50,15 @@ function thumbUrl(m) {
   return k ? `/files/media/${m.id}/${k.file}` + (v ? `?v=${String(v).slice(0, 16)}` : '') : null;
 }
 
-/** Ask Claude for moments — and, in the same request, the post drafts that go with them
+/** Ask the agent for moments — and, in the same request, the post drafts that go with them
  *  (one click, one wait). step 'draft' alone is for files that already have moments. */
 export async function runAI(m, step, force = false) {
   const steps = step === 'moments' ? ['moments', 'draft'] : [step];
   try {
     await api.runSteps([m.id], steps, force);
     toast(step === 'moments'
-      ? `Claude is picking the best moments in “${m.name}” and drafting posts for them. About a minute — keep editing.`
-      : `Claude is writing post drafts for “${m.name}”. About a minute — keep editing.`, { ms: 4500 });
+      ? `The agent is picking the best moments in “${m.name}” and drafting posts for them. About a minute — keep editing.`
+      : `The agent is writing post drafts for “${m.name}”. About a minute — keep editing.`, { ms: 4500 });
     refresh();
   } catch (e) { toast('Couldn’t start that: ' + e.message, { kind: 'error' }); }
 }
@@ -77,7 +77,7 @@ export async function runAIAll() {
   try {
     const r = await api.runSteps(ms.map(m => m.id), ['moments', 'draft']);
     if (r?.job) S.findAll = { job: r.job, ids: ms.map(m => m.id) };
-    toast(`Claude is going through ${ms.length} file${ms.length > 1 ? 's' : ''} at once: moments first, then post drafts. A minute or two — keep editing.`, { ms: 5000 });
+    toast(`The agent is going through ${ms.length} file${ms.length > 1 ? 's' : ''} at once: moments first, then post drafts. A minute or two — keep editing.`, { ms: 5000 });
     refresh();
   } catch (e) { toast('Couldn’t start that: ' + e.message, { kind: 'error' }); }
 }
@@ -99,21 +99,21 @@ function findAllDone(ev) {
   const order = projectMedia().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const found = order.filter(m => run.ids.includes(m.id) && m.moments?.length);
   if (!found.length) {
-    toast('Claude didn’t find moments worth cutting in those files. Drag footage onto the Story and trim it yourself.', { kind: 'warn', ms: 7000 });
+    toast('The agent didn’t find moments worth cutting in those files. Drag footage onto the Story and trim it yourself.', { kind: 'warn', ms: 7000 });
     renderBin();
     return;
   }
   focusMedia(found[0].id);
   requestAnimationFrame(showMoments);
   toast(`Moments found in ${found.length} file${found.length > 1 ? 's' : ''}. Click a file to see them.`, { kind: 'good', ms: 8000 });
-  native?.notify('Moments found', `Claude picked moments in ${found.length} file${found.length > 1 ? 's' : ''} and drafted the posts.`);
+  native?.notify('Moments found', `The agent picked moments in ${found.length} file${found.length > 1 ? 's' : ''} and drafted the posts.`);
 }
 
 function confirmFindAgain(m) {
   modal((card, close) => {
     const n = m.moments?.length || 0;
     card.append(el('div.modal-head', {}, el('h2', { text: 'Find new moments?' })),
-      el('p.hint', { text: `This replaces ${n === 1 ? 'this moment' : `these ${n} moments`} (and their post drafts) with a fresh set from Claude. It takes about a minute. Clips already in your Story stay where they are.` }),
+      el('p.hint', { text: `This replaces ${n === 1 ? 'this moment' : `these ${n} moments`} (and their post drafts) with a fresh set from the agent. It takes about a minute. Clips already in your Story stay where they are.` }),
       el('div.modal-actions', {}, el('button.btn', { text: 'Keep these', onclick: close }),
         el('button.btn.primary', { text: 'Find new moments', onclick: () => { close(); runAI(m, 'moments', true); } })));
   });
@@ -157,9 +157,9 @@ function mediaCard(m, inProject = true) {
       m.has_video ? el('button.btn.xs.ghost', { text: '▶ Preview', 'data-tip': 'Watch the raw footage', onclick: e => { e.stopPropagation(); focusMedia(m.id); player.previewSource(m.id); } }) : null,
       m.has_video ? el('button.btn.xs.ghost', { text: '+ Story', 'data-tip': 'Add the whole clip to the end of your story', onclick: e => { e.stopPropagation(); addClip({ media: m.id, in: 0, out: m.duration }); } }) : null,
       st.moments === 'todo' || st.moments === 'failed'
-        ? el('button.btn.xs.accent', { text: '✦ Find moments', 'data-tip': 'Claude watches this, picks the best parts to post and drafts the posts (about a minute)', onclick: e => { e.stopPropagation(); runAI(m, 'moments'); } }) : null,
+        ? el('button.btn.xs.accent', { text: '✦ Find moments', 'data-tip': 'The agent watches this, picks the best parts to post and drafts the posts (about a minute)', onclick: e => { e.stopPropagation(); runAI(m, 'moments'); } }) : null,
       st.moments === 'done' && st.draft === 'todo'
-        ? el('button.btn.xs.accent', { text: '✎ Write posts', 'data-tip': 'Claude drafts captions for X, LinkedIn and Shorts from these moments', onclick: e => { e.stopPropagation(); runAI(m, 'draft'); } }) : null)));
+        ? el('button.btn.xs.accent', { text: '✎ Write posts', 'data-tip': 'The agent drafts captions for X, LinkedIn and Shorts from these moments', onclick: e => { e.stopPropagation(); runAI(m, 'draft'); } }) : null)));
   card.addEventListener('click', () => { focusMedia(m.id); requestAnimationFrame(showMoments); });
   card.addEventListener('dragstart', e => {
     e.dataTransfer.setData(DND_TYPE, JSON.stringify({ media: m.id, in: 0, out: m.duration }));
@@ -226,7 +226,7 @@ function renderMoments() {
   box.classList.toggle('closed', momentsClosed);
   if (momentsClosed) {
     const n = m.moments?.length || 0;
-    box.replaceChildren(el('div.sec-head.folded', { onclick: () => setMomentsClosed(false), 'data-tip': 'Show Claude’s moments for this footage' },
+    box.replaceChildren(el('div.sec-head.folded', { onclick: () => setMomentsClosed(false), 'data-tip': 'Show the agent’s moments for this footage' },
       el('h3', { text: 'Moments' }), el('span.sec-sub', { text: n ? `${n} saved · ${m.name}` : m.name }),
       el('button.btn.xs.ghost', { text: 'Show ▾' })));
     return;
@@ -237,20 +237,20 @@ function renderMoments() {
   let body;
   if (m.moments?.length) {
     body = el('div.moment-list', {}, m.moments.map(mo => momentCard(m, mo)));
-    head.append(el('button.btn.xs.ghost', { text: 'Find again', 'data-tip': 'Ask Claude for a fresh set of moments (replaces these)', onclick: () => confirmFindAgain(m) }));
+    head.append(el('button.btn.xs.ghost', { text: 'Find again', 'data-tip': 'Ask the agent for a fresh set of moments (replaces these)', onclick: () => confirmFindAgain(m) }));
   } else if (st.moments === 'running' || st.moments === 'queued') {
-    body = el('div.empty-small', {}, el('span.spinner'), ' Claude is watching this footage and picking moments…');
+    body = el('div.empty-small', {}, el('span.spinner'), ' The agent is watching this footage and picking moments…');
   } else if (!m.steps?.transcribe && m.has_audio || !m.steps?.keyframes && m.has_video) {
-    body = el('div.empty-small', {}, el('span.spinner'), ' Getting this footage ready (words and frames)… then Claude can pick moments.');
+    body = el('div.empty-small', {}, el('span.spinner'), ' Getting this footage ready (words and frames)… then the agent can pick moments.');
   } else if (st.moments === 'done') {
     body = el('div.empty-small', {},
-      el('div', { text: 'Claude didn’t find anything worth cutting here. That’s normal for silent screen recordings: drag it onto the Story and trim it yourself.' }),
+      el('div', { text: 'The agent didn’t find anything worth cutting here. That’s normal for silent screen recordings: drag it onto the Story and trim it yourself.' }),
       el('button.btn.sm.ghost', { text: 'Ask again', onclick: () => runAI(m, 'moments', true) }));
   } else if (!m.has_video) {
     body = el('div.empty-small', { text: 'Audio only — moments still work, but it can’t go on the Story yet.' });
   } else {
     body = el('div.empty-small', {},
-      el('div', { text: 'No moments yet. Claude can watch this and suggest the best parts to post.' }),
+      el('div', { text: 'No moments yet. The agent can watch this and suggest the best parts to post.' }),
       el('button.btn.sm.accent', { text: '✦ Find moments', onclick: () => runAI(m, 'moments') }),
       el('div.hint', { text: 'Or skip it: drag the whole clip onto the Story and trim it yourself.' }));
   }
@@ -271,7 +271,7 @@ function renderExports() {
     el('div.export-list', {}, shown.map(x => el('div.export' + (x.file === freshExport ? '.fresh' : ''), {},
       el('div.ex-info', {},
         el('div.ex-name', { text: x.file.split('/').pop(), title: x.file }),
-        el('div.ex-meta', { text: `${timeAgo(x.ts)} · ${fmtDur(x.duration)} · ${x.aspect}${x.actor === 'claude' ? ' · by Claude' : ''}` })),
+        el('div.ex-meta', { text: `${timeAgo(x.ts)} · ${fmtDur(x.duration)} · ${x.aspect}${isAgent(x.actor) ? ' · by the agent' : ''}` })),
       el('button.btn.xs.ghost', { text: '▶', 'data-tip': 'Watch it', onclick: () => playExport(x) }),
       el('button.btn.xs.accent', { text: 'Copy post', 'data-tip': 'Open the post drafts for this video’s first clip, ready to copy', onclick: () => emit('postsForStory') }),
       el('button.btn.xs.ghost', { text: 'Finder', 'data-tip': 'Show the file in Finder (AirDrop it to your phone from there)', onclick: () => api.reveal(x.file).catch(e => toast(e.message)) })))));

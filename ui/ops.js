@@ -121,7 +121,7 @@ export function startOf(tl, id) {
   return i < 0 ? 0 : layout(tl).starts[i];
 }
 
-/** Three-way merge of two edits made from the same base (clips matched by id), for when Claude
+/** Three-way merge of two edits made from the same base (clips matched by id), for when the agent
  *  saved while the operator was editing. Each side's changes to clips the other side didn't touch
  *  survive: trims, labels, adds, deletes, and one side's reorder. Returns {tl, conflicts}, where
  *  conflicts counts clips both sides changed (theirs wins those; the caller offers Undo). */
@@ -159,7 +159,7 @@ export function merge3(base, mine, theirs) {
   return { tl: { ...theirs, aspect: meta('aspect'), captions: meta('captions'), clips }, conflicts };
 }
 
-/** What changed between two stories, by clip id — for "Claude removed …" toasts and the
+/** What changed between two stories, by clip id — for "The agent removed …" toasts and the
  *  Activity feed. nameOf(clip) gives a human name for a clip. */
 export function diffStory(a, b, nameOf = c => c.label || 'a clip') {
   const A = new Map((a?.clips || []).map((c, i) => [c.id, { c, i }]));

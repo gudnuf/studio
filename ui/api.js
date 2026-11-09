@@ -23,7 +23,7 @@ export const ingestPaths = (paths, project, brand) => req('POST', '/api/ingest-p
 export const getActivity = () => req('GET', '/api/activity');
 /** Save the story. `base` = the server revision this edit started from (0 for a project nobody
  *  has saved yet); the server answers 409 (err.conflict = {rev, actor, timeline}) if someone else
- *  (usually Claude) saved since. Always sent: a missing base would mean 0 to the server anyway. */
+ *  (usually the agent) saved since. Always sent: a missing base would mean 0 to the server anyway. */
 export async function putTimeline(slug, tl, base) {
   const q = `?base=${base ?? 0}`;
   const r = await fetch(`/api/projects/${encodeURIComponent(slug)}/timeline${q}`, {
@@ -45,7 +45,7 @@ export const sendNote = (text, project, focus) => req('POST', '/api/notes', { te
 export const postFocus = focus => req('POST', '/api/focus', focus).catch(() => {});
 export const moveMedia = (media, project) => req('POST', '/api/move', { media, project });
 export const reveal = path => req('POST', '/api/reveal', { path });
-/** The operator's rewrite of one post-draft field (text null = back to Claude's draft). */
+/** The operator's rewrite of one post-draft field (text null = back to the agent's draft). */
 export const saveDraft = (mid, { key, field, n, text }) => req('POST', `/api/drafts/${encodeURIComponent(mid)}`, { key, field, n, text });
 /** Fix a misheard word: just the word at `index`, or (all) every `wrong` in every file. */
 export const fixWord = (mid, { index, wrong, right, all }) => req('POST', `/api/words/${encodeURIComponent(mid)}/fix`, { index, wrong, right, all: !!all });

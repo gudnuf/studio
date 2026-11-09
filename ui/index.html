@@ -54,7 +54,7 @@
     <div class="pane-head">
       <h2>Footage</h2>
       <div class="pane-actions">
-        <button id="btn-find-all" class="btn sm accent" hidden data-tip="Claude watches every file and picks the best parts, then drafts posts for them (a minute or two, all at once)">✦ Find moments</button>
+        <button id="btn-find-all" class="btn sm accent" hidden data-tip="The agent watches every file and picks the best parts, then drafts posts for them (a minute or two, all at once)">✦ Find moments</button>
         <button id="btn-add-footage" class="btn sm" data-tip="Add video files (or drag them anywhere onto this window)">+ Add footage</button>
         <input type="file" id="file-input" accept="video/*,audio/*,.mov,.mp4,.m4v" multiple hidden>
       </div>
@@ -102,13 +102,13 @@
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="clip" data-tip="The selected clip: trim it, split it, edit by words">Clip</button>
       <button class="tab" data-tab="posts" data-tip="Post drafts written for this footage">Posts</button>
-      <button class="tab" data-tab="activity" data-tip="Who did what: you and Claude">Activity<span id="activity-dot" class="dot" hidden></span></button>
-      <button class="tab" data-tab="claude" data-tip="Leave Claude a note about what you're looking at">Tell Claude</button>
+      <button class="tab" data-tab="activity" data-tip="Who did what: you and the agent">Activity<span id="activity-dot" class="dot" hidden></span></button>
+      <button class="tab" data-tab="agent" data-tip="Leave the agent a note about what you're looking at">Tell the agent</button>
     </nav>
     <section id="tab-clip" class="tab-body active"></section>
     <section id="tab-posts" class="tab-body"></section>
     <section id="tab-activity" class="tab-body"></section>
-    <section id="tab-claude" class="tab-body"></section>
+    <section id="tab-agent" class="tab-body"></section>
   </aside>
 
   <!-- ===== Bottom: story timeline ===== -->
@@ -141,12 +141,12 @@
   <!-- ===== Footer ===== -->
   <footer id="footer">
     <div class="ft-left">
-      <span id="conn" class="conn" data-tip="Live link to the studio. Claude's edits show up here instantly."><span class="conn-dot"></span><span id="conn-label">Connecting…</span></span>
+      <span id="conn" class="conn" data-tip="Live link to the studio. The agent's edits show up here instantly."><span class="conn-dot"></span><span id="conn-label">Connecting…</span></span>
       <span id="jobs" class="jobs"></span>
       <span id="health" class="health" hidden></span>
     </div>
     <div class="ft-right">
-      <span class="cli-label" data-tip="The same edit as a command. Claude uses these.">CLI</span>
+      <span class="cli-label" data-tip="The same edit as a command. The agent uses these.">CLI</span>
       <code id="cli-line" class="cli-line">studio timeline show</code>
       <button id="btn-copy-cli" class="btn ghost xs" data-tip="Copy the command">Copy</button>
     </div>

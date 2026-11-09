@@ -11,7 +11,7 @@ import { initBin, playExport, showExport } from './bin.js';
 import { initInspector, removeSelected, openTab } from './inspector.js';
 import { initLive, refresh } from './live.js';
 import { FORMATS, ORDER, formatIcon } from './formats.js';
-import { $, $$, el, fmtT, toast, initTooltips, isTyping, copyText, modal, debounce } from './util.js';
+import { $, $$, el, fmtT, toast, initTooltips, isTyping, copyText, modal, debounce, isAgent } from './util.js';
 import { native } from './native.js';
 import { shareDialog, importDialog } from './share.js';
 
@@ -386,8 +386,8 @@ async function checkHealth() {
   const box = $('#health'), notes = [];
   if (h.model && !h.model.exists) notes.push(['Words can’t be written out: the speech model isn’t on this Mac',
     `Studio needs Whisper’s model at ${h.model.path}. Until it’s there, footage gets previews and frames but no words, captions or moments.`]);
-  if (h.tools && !h.tools.claude) notes.push(['Find moments needs Claude',
-    'Studio can’t find the `claude` command. Install Claude Code (so `claude` works in Terminal), then reopen Studio.']);
+  if (h.tools && !h.tools.agent) notes.push(['Find moments needs a coding agent',
+    h.agent?.error || `Studio can’t find the \`${h.agent?.command || 'agent'}\` command. Install your agent’s CLI (Claude Code, Codex, Goose…) so it works in Terminal, or set STUDIO_AGENT / STUDIO_AGENT_CMD (see the README), then reopen Studio.`]);
   if (h.tools && (!h.tools.ffmpeg || !h.tools['whisper-cli'])) notes.push(['Studio’s video tools are missing',
     'ffmpeg or whisper-cli isn’t on the PATH, so nothing can be prepared. Start Studio with ./studio ui or the app.']);
   if (!notes.length) { box.hidden = true; return; }
@@ -444,12 +444,12 @@ async function boot() {
     if (d?.preview) { renderTime(); return; }
     renderFormat(); renderSteps(); renderExportBtn(); renderTime(); renderCli();
     if (d?.remote) {
-      const who = d.actor === 'claude' ? 'Claude' : d.actor === 'operator' ? 'Another window' : 'The terminal';
-      if (d.conflict && d.merged) toast(`${who} edited the story while you were editing${d.prev && diffStory(d.prev, S.tl, clipName).summary ? ` (${diffStory(d.prev, S.tl, clipName).summary})` : ''}. Both changes are kept.`, { kind: 'claude', ms: 5000, actions: [{ label: 'Undo', run: doUndo }] });
-      else if (d.conflict) toast(`${who} changed the same clip you were editing. Showing their version. Undo brings back yours.`, { kind: 'claude', ms: 7000, actions: [{ label: 'Bring mine back', run: doUndo }] });
+      const who = isAgent(d.actor) ? 'The agent' : d.actor === 'operator' ? 'Another window' : 'The terminal';
+      if (d.conflict && d.merged) toast(`${who} edited the story while you were editing${d.prev && diffStory(d.prev, S.tl, clipName).summary ? ` (${diffStory(d.prev, S.tl, clipName).summary})` : ''}. Both changes are kept.`, { kind: 'agent', ms: 5000, actions: [{ label: 'Undo', run: doUndo }] });
+      else if (d.conflict) toast(`${who} changed the same clip you were editing. Showing their version. Undo brings back yours.`, { kind: 'agent', ms: 7000, actions: [{ label: 'Bring mine back', run: doUndo }] });
       else {
         const what = d.prev ? diffStory(d.prev, S.tl, clipName).summary : '';
-        toast(what ? `${who} ${what}` : `${who} edited the story`, { kind: 'claude', ms: what.startsWith('removed') ? 7000 : 5000, actions: [{ label: 'Undo', run: doUndo }] });
+        toast(what ? `${who} ${what}` : `${who} edited the story`, { kind: 'agent', ms: what.startsWith('removed') ? 7000 : 5000, actions: [{ label: 'Undo', run: doUndo }] });
       }
     }
   });

@@ -1,4 +1,4 @@
-// Right pane: Clip (trim, split, edit by words) | Posts | Activity | Tell Claude.
+// Right pane: Clip (trim, split, edit by words) | Posts | Activity | Tell the agent.
 
 import { S, on, emit, commit, select, setPlayhead, gestureBegin, gesturePreview, gestureEnd,
   mediaOf, selClip, selIndex, setWordSel, focusPayload, project, sendFocus } from './store.js';
@@ -9,7 +9,7 @@ import { player, transcriptStamp } from './player.js';
 import { runAI, needsMoments, runAIAll } from './bin.js';
 import { activity } from './live.js';
 import { splitAtPlayhead, flashClips, scrollToPlayhead } from './timeline.js';
-import { $, $$, el, fmtT, fmtDur, clamp, toast, copyText, timeAgo, bsearch, rafBatch, debounce } from './util.js';
+import { $, $$, el, fmtT, fmtDur, clamp, toast, copyText, timeAgo, bsearch, rafBatch, debounce, isAgent } from './util.js';
 
 let tab = 'clip';
 export function openTab(name) {
@@ -23,7 +23,7 @@ function renderTab() {
   if (tab === 'clip') renderClip();
   else if (tab === 'posts') renderPosts();
   else if (tab === 'activity') renderActivity();
-  else if (tab === 'claude') renderClaude();
+  else if (tab === 'agent') renderAgent();
 }
 
 /* =====================================================================
@@ -46,8 +46,8 @@ function renderClip() {
     const todo = needsMoments();
     box.replaceChildren(el('div.empty-pane', {},
       todo.length ? el('div.cta-card', {},
-        el('div.empty-title', { text: 'Next: let Claude pick the best moments' }),
-        el('div.empty-sub', { text: `Claude watches ${todo.length === 1 ? 'your footage' : `all ${todo.length} files`}, picks the parts worth posting and drafts the posts. About a minute; keep working meanwhile.` }),
+        el('div.empty-title', { text: 'Next: let the agent pick the best moments' }),
+        el('div.empty-sub', { text: `The agent watches ${todo.length === 1 ? 'your footage' : `all ${todo.length} files`}, picks the parts worth posting and drafts the posts. About a minute; keep working meanwhile.` }),
         el('button.btn.accent', { text: todo.length > 1 ? `✦ Find moments in all ${todo.length}` : '✦ Find moments', onclick: runAIAll })) : null,
       el('div.empty-title', { text: 'Nothing selected' }),
       el('div.empty-sub', { text: 'Click a clip in the Story below to trim it, split it, or edit it by its words. Or click footage on the left to read what was said.' }),
@@ -61,7 +61,7 @@ function renderClip() {
   const parts = [];
   if (clip) {
     const i = selIndex();
-    const labelIn = el('input.label-input', { value: clip.label || '', placeholder: m.name, 'data-tip': 'Name this clip (Claude sees this name too)' });
+    const labelIn = el('input.label-input', { value: clip.label || '', placeholder: m.name, 'data-tip': 'Name this clip (the agent sees this name too)' });
     labelIn.addEventListener('change', () => commit(setLabel(S.tl, clip.id, labelIn.value.trim()), 'Rename clip'));
     labelIn.addEventListener('keydown', e => { if (e.key === 'Enter') labelIn.blur(); e.stopPropagation(); });
     parts.push(el('div.insp-head', {},
@@ -536,19 +536,19 @@ function renderPosts() {
   const m = mediaOf(c?.media || S.media);
   if (!m) {
     box.replaceChildren(el('div.empty-pane', {}, el('div.empty-title', { text: 'Posts' }),
-      el('div.empty-sub', { text: 'Pick footage on the left (or a clip in the Story) to see the post drafts Claude wrote for it.' })));
+      el('div.empty-sub', { text: 'Pick footage on the left (or a clip in the Story) to see the post drafts the agent wrote for it.' })));
     return;
   }
   const dr = m.drafts || {};
   const posts = dr.posts || [];
   const head = el('div.insp-head', {}, el('div.insp-kicker', { text: 'Post drafts' }), el('div.insp-title', { text: m.name }),
-    el('div.hint', { text: 'These are rough on purpose: rewrite them in your own voice. Your rewrites are saved, and Claude can read them.' }));
+    el('div.hint', { text: 'These are rough on purpose: rewrite them in your own voice. Your rewrites are saved, and the agent can read them.' }));
   if (!posts.length) {
     const hasMoments = m.moments?.length;
     const busy = ['running', 'queued'].includes(stepOf(m, 'draft')) || ['running', 'queued'].includes(stepOf(m, 'moments'));
     box.replaceChildren(head, el('div.empty-small', {},
-      busy ? el('div', {}, el('span.spinner.xs'), ' Claude is writing these now…')
-        : el('div', { text: hasMoments ? 'No drafts yet for this footage.' : 'Drafts are written from moments: Claude picks the moments, then writes a post for each.' }),
+      busy ? el('div', {}, el('span.spinner.xs'), ' The agent is writing these now…')
+        : el('div', { text: hasMoments ? 'No drafts yet for this footage.' : 'Drafts are written from moments: the agent picks the moments, then writes a post for each.' }),
       busy ? null : el('button.btn.sm.accent', { text: hasMoments ? '✎ Write posts' : '✦ Find moments & write posts', onclick: () => runAI(m, hasMoments ? 'draft' : 'moments') })));
     return;
   }
@@ -593,7 +593,7 @@ function draftField(m, key, n, f, label, tip, limit, original) {
   const ta = el('textarea.draft', { spellcheck: 'true', rows: 2 });
   ta.value = saved ?? original;
   const count = el('span.count');
-  const reset = el('button.btn.xs.ghost', { text: 'Reset', 'data-tip': 'Go back to Claude’s draft', hidden: saved == null || saved === original });
+  const reset = el('button.btn.xs.ghost', { text: 'Reset', 'data-tip': 'Go back to the agent’s draft', hidden: saved == null || saved === original });
   const edited = el('span.edited-tag', { text: 'your version', hidden: saved == null || saved === original });
   const upd = () => {
     const len = ta.value.length;
@@ -621,7 +621,7 @@ function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.
 /* =====================================================================
    ACTIVITY TAB
    ===================================================================== */
-const who = a => a === 'operator' ? 'You' : a === 'claude' ? 'Claude' : a === 'cli' ? 'Terminal' : 'Studio';
+const who = a => a === 'operator' ? 'You' : a === 'agent' ? 'Agent' : a === 'cli' ? 'Terminal' : 'Studio';
 function mname(id) { return S.server?.media?.[id]?.name || (id ? id.slice(0, 6) : ''); }
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 function pname(slug) { return S.server?.projects?.[slug]?.name || slug; }
@@ -636,7 +636,7 @@ export function describe(ev) {
     case 'project.created': return `started the project “${d.name}”`;
     case 'ingested': return `added ${d.name}`;
     case 'media.moved': return `moved ${m} to “${pname(d.project)}”`;
-    case 'note': return d.actor === 'claude' ? `replied: “${String(d.text || '').slice(0, 160)}”` : `left a note: “${String(d.text || '').slice(0, 160)}”`;
+    case 'note': return isAgent(d.actor) ? `replied: “${String(d.text || '').slice(0, 160)}”` : `left a note: “${String(d.text || '').slice(0, 160)}”`;
     case 'note.ack': return `saw ${plural((d.ids || []).length, 'note')}`;
     case 'draft.edited': return `rewrote a ${d.field === 'x' ? 'X post' : d.field === 'linkedin' ? 'LinkedIn post' : d.field === 'short' ? 'caption' : d.field === 'title' ? 'title' : 'draft'} for ${m}`;
     case 'job.started': return d.kind === 'upload' ? `started preparing ${d.name}` : d.kind === 'render' ? `started exporting “${pname(d.project)}”` : `started ${(d.steps || []).join(', ')}`;
@@ -657,9 +657,9 @@ export function describe(ev) {
 }
 function actorOf(ev) {
   const d = ev.data || {};
-  if (d.actor) return d.actor;
+  if (d.actor) return isAgent(d.actor) ? 'agent' : d.actor;
   if (ev.type.startsWith('step.') || ev.type.startsWith('job.') || ev.type === 'ingested' || ev.type === 'brand.set' || ev.type === 'ui.started') {
-    if (ev.type === 'step.moments' || ev.type === 'step.draft') return 'claude';
+    if (ev.type === 'step.moments' || ev.type === 'step.draft') return 'agent';
     return 'studio';
   }
   return 'cli';
@@ -681,7 +681,7 @@ function renderActivity() {
   const evs = activity.filter(ev => !['job.done', 'brand.set', 'job.started', 'note.ack'].includes(ev.type));
   const list = evs.slice().reverse().filter(ev => {
     const a = actorOf(ev);
-    return actFilter === 'all' || (actFilter === 'claude' ? a === 'claude' : a === 'operator');
+    return actFilter === 'all' || (actFilter === 'agent' ? a === 'agent' : a === 'operator');
   }).slice(0, 300);
   // fold runs of the same edit by the same person ("edited the story ×6")
   const folded = [];
@@ -690,10 +690,10 @@ function renderActivity() {
     if (last && ev.type === 'timeline.saved' && last.ev.type === 'timeline.saved' && actorOf(last.ev) === actorOf(ev) && last.ev.data?.project === ev.data?.project) last.n++;
     else folded.push({ ev, n: 1 });
   }
-  const seg = el('div.seg-ctl', {}, ['all', 'claude', 'operator'].map(f =>
-    el('button' + (f === actFilter ? '.on' : ''), { text: f === 'all' ? 'Everyone' : f === 'claude' ? 'Claude' : 'You', onclick: () => { actFilter = f; renderActivity(); } })));
+  const seg = el('div.seg-ctl', {}, ['all', 'agent', 'operator'].map(f =>
+    el('button' + (f === actFilter ? '.on' : ''), { text: f === 'all' ? 'Everyone' : f === 'agent' ? 'Agent' : 'You', onclick: () => { actFilter = f; renderActivity(); } })));
   box.replaceChildren(
-    el('div.insp-head', {}, el('div.insp-kicker', { text: 'Activity' }), el('div.hint', { text: 'Everything you and Claude do lands here, newest first.' }), seg),
+    el('div.insp-head', {}, el('div.insp-kicker', { text: 'Activity' }), el('div.hint', { text: 'Everything you and the agent do lands here, newest first.' }), seg),
     folded.length ? el('ul.activity', {}, folded.slice(0, 150).map(({ ev, n }) => {
       const a = actorOf(ev);
       const restorable = ev.type === 'timeline.saved' && ev.data?.project === S.slug && ev !== latestSave && ev.data?.timeline;
@@ -713,7 +713,7 @@ function restoreVersion(ev) {
 }
 
 /* =====================================================================
-   TELL CLAUDE TAB
+   TELL THE AGENT TAB
    ===================================================================== */
 let draftNote = localStorage.getItem('studio.note') || '';
 function focusSummary() {
@@ -725,8 +725,8 @@ function focusSummary() {
   if (f.transcript_selection) bits.push(`Words: “${f.transcript_selection.text.slice(0, 80)}${f.transcript_selection.text.length > 80 ? '…' : ''}”`);
   return bits;
 }
-function renderClaude() {
-  const box = $('#tab-claude');
+function renderAgent() {
+  const box = $('#tab-agent');
   const ta = el('textarea.note', { rows: 5, placeholder: 'e.g. “Make this clip start on ‘With Jefe’” or “Cut a 30-second version for LinkedIn from my two best moments.”' });
   ta.value = draftNote;
   ta.addEventListener('input', () => { draftNote = ta.value; localStorage.setItem('studio.note', draftNote); });
@@ -737,31 +737,31 @@ function renderClaude() {
       sendFocus();
       await api.sendNote(text, S.slug, focusPayload());
       draftNote = ''; localStorage.removeItem('studio.note');
-      toast('Sent to Claude.', { kind: 'good' });
-      setTimeout(renderClaude, 300);
+      toast('Sent to the agent.', { kind: 'good' });
+      setTimeout(renderAgent, 300);
     } catch (e) { toast('Couldn’t send: ' + e.message, { kind: 'error' }); }
   };
   ta.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); });
   const notes = (S.server?.notes || []).filter(n => !n.project || n.project === S.slug).slice(-40);
   const byId = new Map(notes.map(n => [n.id, n]));
   const thread = notes.map(n => {
-    const mine = n.actor !== 'claude';
+    const mine = !isAgent(n.actor);
     const re = n.re && byId.get(n.re);
-    return el('li.msg.' + (mine ? 'me' : 'claude'), {},
+    return el('li.msg.' + (mine ? 'me' : 'agent'), {},
       re && !mine ? el('div.msg-re', { text: `re: “${String(re.text).slice(0, 60)}${re.text.length > 60 ? '…' : ''}”` }) : null,
       el('div.note-text', { text: n.text }),
-      el('div.note-meta', {}, mine ? 'You' : '✦ Claude', ' · ', timeAgo(n.ts),
-        mine ? el('span.ack' + (n.acked ? '.on' : ''), { text: n.acked ? ' · ✓ Claude saw this' : ' · sent', 'data-tip': n.acked ? 'Claude has read this note' : 'Waiting for Claude to read it' }) : null));
+      el('div.note-meta', {}, mine ? 'You' : '✦ Agent', ' · ', timeAgo(n.ts),
+        mine ? el('span.ack' + (n.acked ? '.on' : ''), { text: n.acked ? ' · ✓ the agent saw this' : ' · sent', 'data-tip': n.acked ? 'The agent has read this note' : 'Waiting for the agent to read it' }) : null));
   });
   const parts = [
-    el('div.insp-head', {}, el('div.insp-kicker', { text: 'Tell Claude' }),
-      el('div.hint', {}, 'Claude is working on this same project from the terminal. Leave a note about what you want; it’s sent along with what you have selected right now.')),
-    el('div.focus-card', {}, el('div.fc-title', { text: 'Claude will see' }), el('ul', {}, focusSummary().map(b => el('li', { text: b })))),
+    el('div.insp-head', {}, el('div.insp-kicker', { text: 'Tell the agent' }),
+      el('div.hint', {}, 'Your agent is working on this same project from the terminal. Leave a note about what you want; it’s sent along with what you have selected right now.')),
+    el('div.focus-card', {}, el('div.fc-title', { text: 'The agent will see' }), el('ul', {}, focusSummary().map(b => el('li', { text: b })))),
     notes.length ? el('div.sec-head', {}, el('h3', { text: 'Conversation' })) : null,
     notes.length ? el('ul.notes.thread', {}, thread) : null,
     ta,
-    el('div.note-actions', {}, el('span.hint', { text: '⌘↩ to send' }), el('button.btn.primary', { text: 'Send to Claude', onclick: send })),
-    el('div.hint.mono', {}, 'Claude reads notes with ', el('code', { text: 'studio notes' }), ', your selection with ', el('code', { text: 'studio focus' }), ' and answers with ', el('code', { text: 'studio say' }), '.'),
+    el('div.note-actions', {}, el('span.hint', { text: '⌘↩ to send' }), el('button.btn.primary', { text: 'Send to the agent', onclick: send })),
+    el('div.hint.mono', {}, 'The agent reads notes with ', el('code', { text: 'studio notes' }), ', your selection with ', el('code', { text: 'studio focus' }), ' and answers with ', el('code', { text: 'studio say' }), '.'),
   ];
   box.replaceChildren(...parts.filter(Boolean));
   const th = box.querySelector('.thread');
@@ -781,7 +781,7 @@ export function initInspector() {
   on('select', () => {
     if (tab === 'clip') { if (!C || C.clipId !== S.sel || (!S.sel && C.mid !== S.media)) renderClip(); else updateClip(); }
     else if (tab === 'posts') renderPosts();
-    else if (tab === 'claude') renderClaude();
+    else if (tab === 'agent') renderAgent();
   });
   on('media', () => {
     if (tab === 'clip' && !S.sel && (!C || C.mid !== S.media)) renderClip();
@@ -797,7 +797,7 @@ export function initInspector() {
     }
     updateClip();
   });
-  on('playhead', () => { if (tab === 'clip') updateNowBatched(); if (tab === 'claude' && !S.playing) claudeSoon(); });
+  on('playhead', () => { if (tab === 'clip') updateNowBatched(); if (tab === 'agent' && !S.playing) agentSoon(); });
   on('project', () => { C = null; renderTab(); });
   let postsSig = '', ctaSig = '';
   on('server', () => {
@@ -814,14 +814,14 @@ export function initInspector() {
       const sig = JSON.stringify([m?.id, m?.drafts, m?.moments?.length, m?.steps?.draft]);
       if (sig !== postsSig) { postsSig = sig; renderPosts(); }
     }
-    if (tab === 'claude' && document.activeElement?.tagName !== 'TEXTAREA') renderClaude();
+    if (tab === 'agent' && document.activeElement?.tagName !== 'TEXTAREA') renderAgent();
   });
   on('activity', ev => {
     if (tab === 'activity') renderActivitySoon();
-    else if (actorOf(ev) === 'claude') $('#activity-dot').hidden = false;
+    else if (actorOf(ev) === 'agent') $('#activity-dot').hidden = false;
   });
   renderTab();
 }
 const updateNowBatched = rafBatch(updateNow);
 const renderActivitySoon = debounce(() => renderActivity(), 200);
-const claudeSoon = debounce(() => { if (document.activeElement?.tagName !== 'TEXTAREA') renderClaude(); }, 500);
+const agentSoon = debounce(() => { if (document.activeElement?.tagName !== 'TEXTAREA') renderAgent(); }, 500);

@@ -24,6 +24,10 @@ export function el(spec, attrs = {}, ...kids) {
   return node;
 }
 
+/** Whoever isn't the operator, a person at the terminal ("cli") or the studio itself is the
+ *  agent: new events say "agent", libraries from before say "claude". */
+export const isAgent = a => !!a && !['operator', 'cli', 'studio'].includes(a);
+
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 export const round3 = v => Math.round(v * 1000) / 1000;
 

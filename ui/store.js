@@ -1,9 +1,9 @@
 // The one client-side store: server state, the working copy of the current story,
-// selection, playhead, undo/redo, autosave and the focus beacon for Claude.
+// selection, playhead, undo/redo, autosave and the focus beacon for the agent.
 
 import * as api from './api.js';
 import { layout, same, indexOf, clipAt, merge3 } from './ops.js';
-import { throttle, debounce, clamp, fmtT } from './util.js';
+import { throttle, debounce, clamp, fmtT, isAgent } from './util.js';
 
 const listeners = new Map();
 export function on(evt, fn) {
@@ -42,7 +42,7 @@ const bumpRev = (slug, rev) => { if (rev != null && !(S.rev[slug] >= rev)) S.rev
 /* ---------- derived ---------- */
 export const project = () => S.server?.projects?.[S.slug] || null;
 export const mediaOf = id => S.server?.media?.[id] || null;
-/** Footage of this project: filed under it, or used in its story (e.g. added by Claude from elsewhere). */
+/** Footage of this project: filed under it, or used in its story (e.g. added by the agent from elsewhere). */
 export const projectMedia = () => {
   const used = new Set(S.tl.clips.map(c => c.media));
   return Object.values(S.server?.media || {}).filter(m => m.project === S.slug || used.has(m.id));
@@ -83,7 +83,7 @@ export function applyServer(st, { initial = false, mark = null } = {}) {
       S.base[S.slug] = remote;
       const actor = S.lastRemoteActor[S.slug];
       if (!initial && S.tl.clips.length + remote.clips.length > 0) {
-        pushUndo(S.tl, actor === 'claude' ? "Claude's edit" : 'Outside edit');
+        pushUndo(S.tl, isAgent(actor) ? "the agent's edit" : 'Outside edit');
       }
       const prev = S.tl;
       S.tl = remote;
@@ -226,7 +226,7 @@ async function save() {
     }
   } catch (e) {
     if (e.conflict && S.slug === slug) {
-      // Someone (usually Claude) saved while we were editing. Merge both edits (clips by id);
+      // Someone (usually the agent) saved while we were editing. Merge both edits (clips by id);
       // where both changed the same clip theirs wins and ours stays one Undo away.
       const c = e.conflict;
       S.rev[slug] = c.rev;
@@ -235,7 +235,7 @@ async function save() {
       const base = S.base[slug];
       const { tl: merged, conflicts } = base ? merge3(base, S.tl, remote) : { tl: remote, conflicts: 1 };
       S.base[slug] = remote;
-      pushUndo(S.tl, conflicts ? 'your version' : 'merge with Claude’s edit');
+      pushUndo(S.tl, conflicts ? 'your version' : 'merge with the other edit');
       const prev = S.tl;
       S.tl = merged;
       if (same(merged, remote)) S.savedSeq = S.editSeq;

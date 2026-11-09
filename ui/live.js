@@ -2,7 +2,7 @@
 
 import { S, on, emit, applyServer, editMark } from './store.js';
 import * as api from './api.js';
-import { $, el, debounce, toast, fmtDur } from './util.js';
+import { $, el, debounce, toast, fmtDur, isAgent } from './util.js';
 import { native } from './native.js';
 
 export const activity = [];      // newest last
@@ -67,12 +67,12 @@ function onEvent(ev) {
     emit('activity', ev);
   }
   if (ev.type === 'render.done' && d.project === S.slug) emit('exported', ev);
-  if (ev.type === 'transcript.edited' && ev.media) {   // a word was fixed (here or by Claude): refetch
+  if (ev.type === 'transcript.edited' && ev.media) {   // a word was fixed (here or by the agent): refetch
     api.dropTranscript(ev.media);
     window.dispatchEvent(new CustomEvent('studio:transcript', { detail: ev.media }));
   }
-  if (ev.type === 'note' && d.actor === 'claude' && (!d.project || d.project === S.slug)) {
-    toast(`Claude: ${String(d.text || '').slice(0, 220)}`, { kind: 'claude', ms: 9000, actions: [{ label: 'Open', run: () => emit('openTab', 'claude') }] });
+  if (ev.type === 'note' && isAgent(d.actor) && (!d.project || d.project === S.slug)) {
+    toast(`Agent: ${String(d.text || '').slice(0, 220)}`, { kind: 'agent', ms: 9000, actions: [{ label: 'Open', run: () => emit('openTab', 'agent') }] });
   }
   if (ev.type === 'job.done' && d.kind === 'share' && d.result?.dir) {
     const r = d.result, gb = n => `${(n / 1e9).toFixed(n > 1e10 ? 0 : 1)} GB`;
@@ -96,8 +96,8 @@ function onEvent(ev) {
   if ((ev.type === 'step.moments' || ev.type === 'step.draft') && !S.findAll?.ids?.includes(ev.media)) {
     // (during "Find moments in all" one toast at the end says where to look, not one per file)
     const m = S.server?.media?.[ev.media];
-    toast(ev.type === 'step.moments' ? `Claude found ${d.moments ?? 'some'} moments in ${m?.name || 'your footage'}` : `Post drafts are ready for ${m?.name || 'your footage'} — see the Posts tab`, { kind: 'good', ms: 4500 });
-    if (ev.type === 'step.moments') native?.notify('Moments found', `Claude found ${d.moments ?? 'some'} moments in ${m?.name || 'your footage'}.`);
+    toast(ev.type === 'step.moments' ? `The agent found ${d.moments ?? 'some'} moments in ${m?.name || 'your footage'}` : `Post drafts are ready for ${m?.name || 'your footage'} — see the Posts tab`, { kind: 'good', ms: 4500 });
+    if (ev.type === 'step.moments') native?.notify('Moments found', `The agent found ${d.moments ?? 'some'} moments in ${m?.name || 'your footage'}.`);
   }
   refreshSoon();
 }
