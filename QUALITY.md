@@ -40,6 +40,10 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
    let it. Screen inserts hold ≥ 1.5s per line the viewer has to read, and are legible.
 6. **The ending pays off.** The total, the finished paper, the reaction. No trailing.
 7. **True.** Nothing the brand file's never-claim list forbids; no number the speaker didn't say.
+   What you show matches what's said: no other job's paperwork under this job's numbers. Never
+   build a sentence nobody said: cutting between complete thoughts is fine, splicing words into
+   a new claim is fabrication. A line said about one thing can't be placed over a different
+   thing.
 8. **Not slop.** No hype words, no caption confetti (emoji, color flashes, a sound on every
    word), no rage bait, no app-screen-with-a-pitch ad.
 9. **The operator would post it under their name, unchanged.** If you're not sure, it fails.

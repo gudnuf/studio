@@ -176,6 +176,12 @@ studio timeline split P CLIP AT          # AT = seconds into the clip
 studio timeline fit P CLIP fill|fit|auto # crop to fill / show everything / footage default
 studio timeline move P CLIP TO | rm P CLIP | label P CLIP TEXT | clear P | set P FILE|-
                                   # TO = the clip's new number
+studio timeline cover P CLIP --with MEDIA IN OUT [--at T] [--fit fill|fit]
+                                  # b-roll over the clip's sound (below); T = seconds into the clip
+studio timeline uncover P CLIP [N|all]   # take cover piece N (as `show` lists them) or all off
+studio timeline voice P CLIP|all natural|off   # the voice treatment (all = the story's default)
+studio timeline pace P CLIP|all X        # play 1.0-1.2x as fast, pitch kept (1 = as said)
+studio timeline tighten P CLIP|all [--max 0.35] [--to 0.12]   # cut long pauses down (below)
    --base REV    refuse (exit 3) if the story changed since `show` printed rev REV
    --aspect 9:16|16:9|1:1|4:5   --captions on|off
 studio render P                   # export (loudness -14 LUFS); the UI shows it under "Your videos"
@@ -246,6 +252,37 @@ up to three times, answer the judgment rules, and only then tell the operator.
 
 Still measured by eye: captions clear of the platform's buttons, and fades are made by
 construction (not measured).
+
+## Cover, voice, pace and tightening
+
+- **Cover (b-roll over a-roll).** A clip always keeps its own **sound**; its **picture** can be
+  covered by pieces of other footage: `timeline cover P CLIP --with MEDIA IN OUT --at T` shows
+  MEDIA's IN–OUT from T seconds into the clip. On the timeline the clip carries
+  `cover: [{media, in, out, at[, fit]}]`, where `at` is on the clip's *own media clock*
+  (source seconds), so a trim, split, snap or tighten leaves every piece over the words it was
+  put under. Where no piece covers, the clip's own picture shows; a new piece replaces what it
+  lands on. Render builds the picture stretch by stretch (each fitted to the frame like any
+  clip, the sound's captions burned across all of them), joins it and lays the clip's own sound
+  under it in one piece, so cover never changes what's heard. `render.done` carries a cut list
+  (`cuts`: `sound` or `picture`); `check` judges only sound cuts as speech cuts and makes a
+  review sheet for each picture cut too. The Story timeline marks covered stretches with a thin
+  orange line along the top of the clip.
+- **Voice.** `natural` (the `VOICE_CHAINS` constant in studio.py: rumble cut, gentle denoise,
+  less mud, a little presence, soft de-ess, light compression) runs on a clip's sound before
+  loudness normalization. Spoken clips get it unless a clip, or the story (`voice … all`), says
+  `off`; clips with no speech get nothing.
+- **Pace.** `timeline pace P CLIP 1.1` plays the clip 10% faster: `atempo` on the sound (pitch
+  kept), `setpts` on its own picture, clamped to 1.0–1.2. Everything measured on the export runs
+  on the sped-up clock: captions, snapping's lead and tail, `check`, cut times. Cover pieces play
+  at normal speed over the same words (they use `(out − in) / pace` seconds of their footage).
+- **Tighten.** `timeline tighten P CLIP|all` splits a spoken clip at every pause inside its
+  speech longer than `--max` (0.35 s) and cuts it down to `--to` (0.12 s, export seconds: 60%
+  after the last word, 40% before the next), in silence only; every part gets the usual 20 ms
+  fades. Cover is laid back on the shorter clock: each piece starts under the same word and
+  plays on unbroken across the cuts. `check` calls these **pause cuts** (the same take going on
+  a little later, skipping only silence) and judges the two edges as one pause rather than as a
+  beat's end and start; `snap` leaves them as tightened. Do it in this order: `pace`, `snap`,
+  `tighten`.
 
 ## Using it with your agent
 
@@ -440,7 +477,11 @@ intellectual-signature interview produces a real brand document.
 - The undo stack is per window and in memory. After a reload, use Activity → **Restore**.
 - Post rewrites are tied to the moment they belong to. **Find again** replaces the moments,
   so it asks first and then drops the old rewrites.
-- Not yet: approving and scheduling posts, b-roll stitching, the identity layer.
+- Not yet: approving and scheduling posts, the identity layer.
+- The preview player plays a clip's own picture at normal speed: cover, voice and pace are
+  heard and seen in the export (and the timeline marks covered stretches), not in the preview.
+  The timeline's clip lengths are source lengths, so a paced clip looks a little longer there
+  than it plays.
 - The Mac app is ad-hoc signed for this Mac, not notarized: copied to another Mac it needs
   right-click ▸ Open the first time.
 - A second launch with a different library (`--home`) brings up the running window instead;

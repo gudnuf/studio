@@ -48,6 +48,11 @@ studio timeline add P MEDIA IN OUT [--at N] [--snap] --base REV
 studio timeline snap P CLIP|all --base REV       # spoken in/out points onto speech edges
 studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
 studio timeline fit P CLIP fill|fit|auto         # crop to fill / show the whole frame
+studio timeline cover P CLIP --with MEDIA IN OUT [--at T]   # b-roll over the clip's sound
+studio timeline uncover P CLIP [N|all]
+studio timeline pace P CLIP|all 1.1              # a little faster, still natural (1.0-1.2)
+studio timeline tighten P CLIP|all               # long pauses inside speech down to 0.12s
+studio timeline voice P CLIP|all natural|off     # natural is the default for spoken clips
 studio words ID --fix WRONG RIGHT [--all]        # fix a misheard word (captions follow)
 studio render P                                  # export; it shows under "Your videos"
 studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
@@ -76,6 +81,22 @@ without replying. `studio log -n 20` shows the latest events from both of you.
 4. Answer every judgment rule `check` lists, honestly, one line each. Any "no" sends the reel
    back, or kills it.
 5. Only then tell the operator it's done, with what check measured and your answers.
+
+## Showing more: cover, pace, tighten
+
+Talking footage holds the words; it rarely needs to hold the picture. While someone is talking,
+**cover** the stretches where the face adds nothing with footage of what the words describe:
+`timeline cover P CLIP --with MEDIA IN OUT --at T` keeps the clip's sound unbroken and lays
+MEDIA's picture over it from T seconds in. Pick b-roll that shows what is being said, at the
+moment it's said ("a quick walk" over the walk, the total over the estimate it's on). Prefer
+steady, legible inserts (a screen, the part, the paper) over shaky talking footage. Keep the
+face where it carries something: the hook, a reaction, the payoff. QUALITY.md's "True" rule
+binds here: never another job's paperwork under this job's numbers, never a line placed over a
+different thing than it's about. `check` judges picture-only cuts as picture, not speech.
+
+To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more than 1.2),
+`timeline snap`, then `timeline tighten` (pauses over 0.35s inside speech down to 0.12s, cut in
+silence). Tightening only removes silence; it never joins words into something nobody said.
 
 A held shot or pause that is meant (a payoff, a reveal) is labelled so: a clip label with
 "payoff", "reveal", "hold" or "still" in it lets `check` pass its pause or still picture.
