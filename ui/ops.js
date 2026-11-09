@@ -112,7 +112,11 @@ export function setCaptions(tl, on) { return { ...tl, captions: !!on }; }
 
 /** Canonical comparison (key order and float noise from the server don't count). */
 const canon = tl => tl ? JSON.stringify([tl.aspect, !!tl.captions,
-  (tl.clips || []).map(c => [c.id, c.media, round3(+c.in), round3(+c.out), c.label || '', c.moment ?? null, c.fit || null])]) : '';
+  (tl.clips || []).map(c => [c.id, c.media, round3(+c.in), round3(+c.out), c.label || '', c.moment ?? null, c.fit || null,
+    ...extras(c)]), tl.voice || null]) : '';
+/** What the agent can set that the UI only carries along: cover (b-roll over the clip's sound),
+ *  voice and pace. They count as changes, so an agent's edit to them is adopted and kept. */
+const extras = c => [JSON.stringify(c.cover || null), c.voice || null, c.pace || null];
 export const same = (a, b) => canon(a) === canon(b);
 
 /** Story time where clip `id` starts. */
@@ -126,7 +130,7 @@ export function startOf(tl, id) {
  *  survive: trims, labels, adds, deletes, and one side's reorder. Returns {tl, conflicts}, where
  *  conflicts counts clips both sides changed (theirs wins those; the caller offers Undo). */
 export function merge3(base, mine, theirs) {
-  const key = c => c ? JSON.stringify([c.media, c.in, c.out, c.label || null, c.fit || null, c.moment ?? null]) : null;
+  const key = c => c ? JSON.stringify([c.media, c.in, c.out, c.label || null, c.fit || null, c.moment ?? null, ...extras(c)]) : null;
   const B = new Map(base.clips.map(c => [c.id, c])), M = new Map(mine.clips.map(c => [c.id, c])),
     T = new Map(theirs.clips.map(c => [c.id, c]));
   const changed = (side, id) => key(side.get(id)) !== key(B.get(id));
@@ -156,7 +160,9 @@ export function merge3(base, mine, theirs) {
   for (const id of baseOrder) if (!ids.includes(id)) ids.push(id);   // kept by the other side's change
   const clips = ids.map(pick).filter(Boolean);
   const meta = f => (mine[f] !== base[f] ? mine[f] : theirs[f]);
-  return { tl: { ...theirs, aspect: meta('aspect'), captions: meta('captions'), clips }, conflicts };
+  const tl = { ...theirs, aspect: meta('aspect'), captions: meta('captions'), clips };
+  if (meta('voice')) tl.voice = meta('voice'); else delete tl.voice;
+  return { tl, conflicts };
 }
 
 /** What changed between two stories, by clip id — for "The agent removed …" toasts and the

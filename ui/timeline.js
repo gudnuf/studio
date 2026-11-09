@@ -79,9 +79,11 @@ function renderNow() {
     if (n.labelText !== text) { n.label.textContent = text; n.labelText = text; }
     const mt = fmtDur(dur(c));
     if (n.metaText !== mt) { n.meta.textContent = mt; n.metaText = mt; }
-    n.node.dataset.tip = `${text} · ${fmtDur(dur(c))} · from ${fmtT(c.in)} to ${fmtT(c.out)} of “${m?.name || '?'}”. Drag to move, drag edges to trim.`;
+    n.node.dataset.tip = `${text} · ${fmtDur(dur(c))} · from ${fmtT(c.in)} to ${fmtT(c.out)} of “${m?.name || '?'}”.` +
+      (c.cover?.length ? ' The orange line marks b-roll over its sound.' : '') + ' Drag to move, drag edges to trim.';
     n.node.dataset.index = i;
     drawFilm(n, c, m, w);
+    drawCover(n, c);
     if (n.node.parentNode !== track) track.append(n.node);
   });
   for (const [id, n] of nodes) if (!seen.has(id)) { n.node.remove(); nodes.delete(id); }
@@ -99,9 +101,26 @@ function makeNode(c) {
     film, el('div.clip-text', {}, label, meta),
     el('div.handle.l', { 'data-tip': 'Drag to trim the start' }),
     el('div.handle.r', { 'data-tip': 'Drag to trim the end' }));
-  const n = { node, film, label, meta, filmKey: '', filmIn: 0 };
+  const cover = el('div.cover-lane');
+  node.append(cover);
+  const n = { node, film, label, meta, cover, filmKey: '', filmIn: 0, coverKey: '' };
   nodes.set(c.id, n);
   return n;
+}
+
+/* Cover: a thin lane along the top of the clip marking where other footage shows over its
+   sound (`studio timeline cover`). Pieces sit on the clip's own media clock (piece.at). */
+function drawCover(n, c) {
+  const key = `${c.in}|${c.out}|${zoom.toFixed(3)}|${JSON.stringify(c.cover || null)}`;
+  if (n.coverKey === key) return;
+  n.coverKey = key;
+  const marks = (c.cover || []).map(p => {
+    const a = Math.max(c.in, p.at), b = Math.min(c.out, p.at + p.out - p.in);
+    if (b - a < 0.05) return null;
+    return el('span', { style: { left: (a - c.in) * zoom + 'px', width: (b - a) * zoom + 'px' } });
+  }).filter(Boolean);
+  n.cover.replaceChildren(...marks);
+  n.node.classList.toggle('covered', marks.length > 0);
 }
 
 /* Filmstrip: tiles sampled from the media's keyframes at the source time each tile covers. */
