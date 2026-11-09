@@ -12,10 +12,12 @@
   studio posts ID [--json]                 post drafts, with the operator's rewrites
   studio project new NAME | ls             projects group media and own a timeline
   studio timeline show [--json] PROJECT    the story, with its rev
-  studio timeline add|clear|set|trim|move|split|rm|label|fit PROJECT ... [--base REV]
+  studio timeline add|clear|set|trim|move|split|rm|label|fit|snap PROJECT ... [--base REV]
                                            edit it; CLIP = 1-based number (as the UI shows:
                                            "Clip 3 of 4" is 3) or id (ids are stable)
   studio timeline fit PROJECT CLIP fill|fit|auto   crop to fill, or show the whole frame
+  studio timeline snap PROJECT CLIP|all    put spoken clips on speech edges (add/trim/set take
+                                           --snap; add MEDIA@N snaps unless --no-snap)
   studio focus [--brief]                   what the operator has selected in the UI
   studio render PROJECT                    export the timeline through ffmpeg
   studio notes [-p P] [--unread] [--json] [--ack ID..]   notes the operator left, with
@@ -716,6 +718,95 @@ def fit_default(item, aspect):
 
 def clip_fit(clip, item, aspect):
     return clip.get("fit") if clip.get("fit") in FITS else fit_default(item, aspect)
+
+# Spoken cuts sit on speech edges (QUALITY.md): a lead-in of 0.05-0.15 s before the first
+# word, >= 0.25 s of tail after the last one's decay, never inside speech. Lead + tail stay
+# under the 0.35 s pause limit, so two snapped clips butt together without a dead gap.
+SNAP_LEAD, SNAP_TAIL = 0.07, 0.26
+SNAP_EDGE = 0.12      # speech overlapping a clip by less than this at an edge is the end of
+                      # the phrase before (or the start of the one after): left out, not pulled in
+SNAP_REACH = 1.5      # the farthest a cut travels to reach a speech edge; past that (a long run
+                      # of speech with no pause) it stays near where it was asked, at the
+                      # quietest moment there, and `studio check` flags it
+
+def snap_clip(a, b, regions, dur=None, words=None, quiet=None):
+    """(a, b) moved onto speech edges: the in point to SNAP_LEAD before the first phrase the
+    clip speaks (back to that phrase's start if it was cut into), the out point to SNAP_TAIL
+    after the last one (on to its end if it was cut into), never into the speech either side.
+    Leading and trailing dead air goes. A clip with no speech in it is left alone (a silent
+    shot, a held reveal). words (the transcript's): the phrase holding the last word that
+    starts inside the clip stays in, even when whisper's early word end put the out point
+    before that phrase began. quiet(t, lo, hi): the quietest moment in lo-hi, for a cut deep
+    in a phrase (see SNAP_REACH). Returns (a, b, reason or None)."""
+    regions = regions or []
+    mine = [r for r in regions if r[1] > a and r[0] < b]
+    keep_last = False
+    said = [w["start"] for w in words or [] if a <= w["start"] < b]
+    if said:
+        r = next((r for r in regions if r[1] > said[-1]), None)
+        if r and r[0] - said[-1] < 0.5 and r not in mine:
+            mine.append(r)
+        keep_last = bool(r) and r[0] - said[-1] < 0.5
+    if len(mine) > 1 and mine[0][1] - a < SNAP_EDGE:
+        mine = mine[1:]                    # just the tail of the phrase before
+    if len(mine) > 1 and not keep_last and b - mine[-1][0] < SNAP_EDGE:
+        mine = mine[:-1]                   # just the onset of the phrase after
+    if not mine or (len(mine) == 1 and not keep_last
+                    and min(b, mine[0][1]) - max(a, mine[0][0]) < SNAP_EDGE):
+        return a, b, None
+    first, last = mine[0], mine[-1]
+    before = max((r[1] for r in regions if r[1] <= first[0]), default=0.0)
+    after = min((r[0] for r in regions if r[0] >= last[1]), default=dur if dur else last[1] + 9e9)
+    na = max(0.0, first[0] - SNAP_LEAD)
+    if na < before:                        # no room for a full lead-in: halfway into the gap
+        na = (before + first[0]) / 2
+    nb = last[1] + SNAP_TAIL
+    if nb > after:
+        nb = (last[1] + after) / 2
+    if dur:
+        nb = min(nb, dur)
+    deep = []
+    if first[0] < a - SNAP_REACH:
+        na = quiet(a, a - 0.4, a + 0.4) if quiet else a
+        deep.append("in")
+    if last[1] - max(b, last[0]) > SNAP_REACH:
+        nb = quiet(b, b - 0.2, b + 0.6) if quiet else b
+        deep.append("out")
+    na, nb = round(na, 3), round(nb, 3)
+    if abs(na - a) < 1e-3 and abs(nb - b) < 1e-3:
+        return a, b, None
+    why = [f"{x} is deep in a run of speech: at its quietest moment nearby" for x in deep]
+    if first[0] < a - 1e-3 and "in" not in deep:
+        why.append("in was inside speech")
+    if last[1] > b + 1e-3 and "out" not in deep:
+        why.append("out was inside speech")
+    if not why:
+        why.append("to the speech edges")
+    return na, nb, ", ".join(why)
+
+def snap_media(mid, a, b):
+    """snap_clip() with this media's speech regions (made now if it has none yet) and words."""
+    it = library().get(mid) or {}
+    words = load_json_cached(mdir(mid) / "transcript.json", {}).get("words")
+    return snap_clip(a, b, ensure_speech(mid), it.get("duration"), words,
+                     lambda t, lo, hi: quietest(it, t, lo, hi))
+
+def quietest(item, t, lo, hi):
+    """The middle of the quietest 30 ms of item's audio between lo and hi (t if unreadable)."""
+    import array
+    lo = max(0.0, lo)
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{lo:.3f}", "-t", f"{hi - lo:.3f}",
+                        "-i", item.get("path", ""), "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+                       capture_output=True)
+    x = array.array("h", r.stdout[:len(r.stdout) // 2 * 2])
+    win, hop = 480, 160
+    if r.returncode != 0 or len(x) < win:
+        return t
+    best = min(range(0, len(x) - win + 1, hop), key=lambda i: sum(v * v for v in x[i:i + win:4]))
+    return round(lo + (best + win / 2) / 16000, 3)
+
+def snap_note(c, na, nb, why):
+    return f"snapped {c.get('id') or ''} {c['in']:.2f}-{c['out']:.2f} -> {na:.2f}-{nb:.2f} ({why})".replace("  ", " ")
 
 class StaleRev(RuntimeError):
     def __init__(self, rev, actor):
@@ -1539,7 +1630,10 @@ def moments(item):
         s, e = max(0.0, float(m["start"])), min(dur, float(m["end"]))
         if e - s < 2:
             continue
-        clean.append({**m, "n": len(clean) + 1, "start": round(s, 2), "end": round(e, 2)})
+        # onto real speech edges: the agent picks from whisper's (early) word times
+        ns, ne, why = snap_media(item["id"], s, e)
+        extra = {"picked": [round(s, 2), round(e, 2)]} if why else {}
+        clean.append({**m, "n": len(clean) + 1, "start": round(ns, 2), "end": round(ne, 2), **extra})
     out = d / "moments.json"
     out.write_text(json.dumps(clean, indent=1))
     return {"moments": len(clean), "sha256": receipt(out)}
@@ -1625,6 +1719,8 @@ def fit_graph(w, h, sw, sh, pre_bg, pre_fg, post):
             f"[fs1]{pre_fg(fw, fh)},setsar=1[ffg];"
             f"[fbg][ffg]overlay=(W-w)/2:(H-h)/2{post}")
 
+FADE = 0.02          # seconds of audio fade at every cut (QUALITY.md: 10-30 ms)
+
 def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=None, fit=None):
     """One clip of source media, cropped to aspect, captions burned in, stereo 48k audio
     (silence if the source has none) so segments concat losslessly. On Apple silicon the
@@ -1648,6 +1744,9 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     crop_w = min(sw_, even(min(sw_, sh_ * w / h)))
     crop_h = min(sh_, even(min(sh_, sw_ * h / w)))
     gpu_crop = f"crop={crop_w}:{crop_h}" if (crop_w, crop_h) != (sw_, sh_) else None
+    # a short fade in and out on every part's audio: no click where two parts meet
+    fd = min(FADE, (b - a) / 4)
+    fades = f"afade=t=in:d={fd:.3f},afade=t=out:st={max(0.0, b - a - fd):.3f}:d={fd:.3f}"
 
     def build(use_hw):
         down = "hwdownload,format=p010le,format=nv12" if vi["tenbit"] else "hwdownload,format=nv12"
@@ -1675,8 +1774,9 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
         else:
             cmd += ["-f", "lavfi", "-t", str(b - a), "-i", "anullsrc=r=48000:cl=stereo"]
             amap = ["-map", "0:v:0", "-map", "1:a:0"]
-        return cmd + ["-vf", vf, *amap, *venc("export", 60), "-c:a", "aac", "-b:a", "160k",
-                      "-ar", "48000", "-ac", "2", "-shortest", "-movflags", "+faststart", out.name]
+        return cmd + ["-vf", vf, *amap, "-af", fades, *venc("export", 60), "-c:a", "aac",
+                      "-b:a", "160k", "-ar", "48000", "-ac", "2", "-shortest", "-movflags",
+                      "+faststart", out.name]
 
     try:
         _with_hw_fallback(build, lambda cmd: ff(cmd, b - a, on_frac, cwd=out.parent))
@@ -1693,9 +1793,11 @@ def cut(item):
     shutil.rmtree(cd, ignore_errors=True)
     cd.mkdir()
     prog = Progress("cut", item["id"], weights={m["n"]: m["end"] - m["start"] for m in ms} or None)
+    ensure_speech(item["id"])
     def one(m):
         out = cd / f"{m['n']:02d}.mp4"
-        render_segment(item, m["start"], m["end"], out, on_frac=prog.part(m["n"]))
+        a, b, _ = snap_media(item["id"], m["start"], m["end"])   # moments from before snapping
+        render_segment(item, a, b, out, on_frac=prog.part(m["n"]))
         return {"n": m["n"], "file": f"clips/{out.name}", "sha256": receipt(out)}
     with ThreadPoolExecutor(render_pool_size()) as ex:
         made = list(ex.map(spawn_ctx(one), ms))
@@ -2694,7 +2796,7 @@ def cmd_timeline(a):
         return
     if a.action == "clear":
         tl = {**tl, "clips": []}
-    elif a.action == "set":
+    elif a.action == "set" and not a.snap:
         tl = json.loads(Path(a.args[0]).read_text() if a.args and a.args[0] != "-" else sys.stdin.read())
     elif a.action == "add":
         # add MEDIA [IN OUT] | add MEDIA@MOMENT_N   (append; --at INDEX to insert)
@@ -2716,6 +2818,7 @@ def cmd_timeline(a):
                 sys.exit(f"{item['name']} has no moment {mn} (it has {len(ms)}; `studio media show {mid}`)")
             clip = {"media": mid, "in": m["start"], "out": m["end"], "label": m["title"],
                     "moment": int(m["n"])}
+            snap = not a.no_snap           # a moment is a spoken beat: on speech edges by default
         else:
             try:
                 a_, b_ = (float(a.args[1]), float(a.args[2])) if len(a.args) >= 3 else (0, item["duration"])
@@ -2724,11 +2827,37 @@ def cmd_timeline(a):
             if b_ - a_ < 0.1:
                 sys.exit(f"timeline add: OUT ({b_:g}) must be after IN ({a_:g})")
             clip = {"media": mid, "in": a_, "out": b_}
+            snap = a.snap
         clip["id"] = clip_id()
+        if snap:
+            na, nb, why = snap_media(mid, clip["in"], clip["out"])
+            if why:
+                print(snap_note(clip, na, nb, why), file=sys.stderr)
+                clip["in"], clip["out"] = na, nb
         clips = list(tl["clips"])
         if a.at is not None and a.at < 1:
             sys.exit("--at is a 1-based position (--at 1 puts it first)")
         clips.insert(a.at - 1 if a.at is not None else len(clips), clip)
+        tl = {**tl, "clips": clips}
+    elif a.action == "snap" or (a.action == "set" and a.snap):
+        # snap P CLIP|all: put spoken clips on speech edges (the fix for `studio check`'s cut
+        # failures). The operator's own trims are only ever snapped when the agent asks.
+        if a.action == "set":
+            tl = json.loads(Path(a.args[0]).read_text() if a.args and a.args[0] != "-" else sys.stdin.read())
+            which = range(len(tl.get("clips", [])))
+        elif not a.args:
+            sys.exit("timeline snap PROJECT CLIP|all")
+        else:
+            which = range(len(tl["clips"])) if a.args[0] == "all" else [clip_index(tl["clips"], a.args[0])]
+        clips = [dict(c) for c in tl.get("clips", [])]
+        for i in which:
+            c = clips[i]
+            if c.get("media") not in st["media"]:
+                continue
+            na, nb, why = snap_media(c["media"], float(c["in"]), float(c["out"]))
+            if why:
+                print(snap_note(c, na, nb, why), file=sys.stderr)
+                c["in"], c["out"] = na, nb
         tl = {**tl, "clips": clips}
     elif a.action in ("trim", "move", "split", "rm", "label", "fit"):
         clips = [dict(c) for c in tl["clips"]]
@@ -2743,6 +2872,11 @@ def cmd_timeline(a):
                     sys.exit(f"trim: OUT ({hi:g}) must be greater than IN ({lo:g}); "
                              f"to remove the clip use `timeline rm {a.project} {c['id']}`")
                 c["in"], c["out"] = lo, hi
+                if a.snap:
+                    na, nb, why = snap_media(c["media"], lo, hi)
+                    if why:
+                        print(snap_note(c, na, nb, why), file=sys.stderr)
+                        c["in"], c["out"] = na, nb
             elif a.action == "move":    # move P CLIP TO  (1-based position)
                 to = int(a.args[1])
                 if to < 1:
@@ -3069,7 +3203,7 @@ def main():
     p.add_argument("name", nargs="?"); p.add_argument("--brand", default="jefe")
     p = sub.add_parser("timeline")
     p.add_argument("action", choices=["show", "add", "clear", "set", "trim", "move", "split", "rm",
-                                      "label", "fit"])
+                                      "label", "fit", "snap"])
     p.add_argument("project"); p.add_argument("args", nargs="*")
     p.add_argument("--at", type=int, metavar="N", help="add: insert as clip N (1-based)")
     p.add_argument("--aspect", choices=list(ASPECTS))
@@ -3077,6 +3211,10 @@ def main():
     p.add_argument("--base", type=int, metavar="REV",
                    help="refuse (exit 3) if the story changed since this rev (from `timeline show`)")
     p.add_argument("--json", action="store_true", help="show: the timeline as JSON, with rev")
+    p.add_argument("--snap", action="store_true",
+                   help="add/trim/set: put the in and out points on speech edges (QUALITY.md)")
+    p.add_argument("--no-snap", action="store_true",
+                   help="add MEDIA@N: keep the moment's times exactly (snapped by default)")
     p = sub.add_parser("render"); p.add_argument("project")
     p = sub.add_parser("notes"); p.add_argument("-p", "--project")
     p.add_argument("--json", action="store_true"); p.add_argument("--since", metavar="TS")
