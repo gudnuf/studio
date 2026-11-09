@@ -646,6 +646,7 @@ export function describe(ev) {
     case 'step.transcribe': return d.skipped ? `${m}: no sound — nothing to write out` : `wrote out ${plural(d.words ?? 0, 'word')} of ${m}`;
     case 'step.proxy': return d.skipped ? `${m}: audio only — no preview needed` : `made a preview of ${m}`;
     case 'step.speech': return d.skipped ? `${m}: no sound — no speech to find` : `found ${plural(d.regions ?? 0, 'stretch', 'stretches')} of speech in ${m}`;
+    case 'check.done': return d.ok ? `checked “${pname(d.project)}”: it clears the bar` : `checked “${pname(d.project)}”: ${(d.failed || []).join(', ')} to fix`;
     case 'step.keyframes': return d.skipped ? `${m}: audio only — no frames to grab` : `grabbed ${plural(d.frames ?? 0, 'frame')} from ${m}`;
     case 'step.moments': return `found ${plural(d.moments ?? 0, 'moment')} in ${m}`;
     case 'step.draft': return `wrote ${plural(d.posts ?? 0, 'post draft')} for ${m}`;

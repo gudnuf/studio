@@ -19,7 +19,9 @@
   studio timeline snap PROJECT CLIP|all    put spoken clips on speech edges (add/trim/set take
                                            --snap; add MEDIA@N snaps unless --no-snap)
   studio focus [--brief]                   what the operator has selected in the UI
-  studio render PROJECT                    export the timeline through ffmpeg
+  studio render PROJECT                    export the timeline through ffmpeg (loudness -14 LUFS)
+  studio check PROJECT [EXPORT] [--json]   measure the export against QUALITY.md, write a review
+                                           sheet next to it; exits 1 if a hard rule fails
   studio notes [-p P] [--unread] [--json] [--ack ID..]   notes the operator left, with
                                            what they had selected when they wrote each
   studio say "TEXT" [-p P] [--re NOTE_ID]  reply to the operator (shows in the UI)
@@ -2049,9 +2051,38 @@ def _render_parts(slug, st, tl, work, stamp):
     exports.mkdir(exist_ok=True)
     final = exports / f"{slug}-{stamp}-{tl['aspect'].replace(':', 'x')}.mp4"
     vcodec = ["-c:v", "copy"] if same else [*venc("export", 60), "-pix_fmt", "yuv420p"]
+    joined = work / "joined.mp4"
     sh(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "list.txt",
-        *vcodec, "-c:a", "copy", "-movflags", "+faststart", str(final)], cwd=work)
-    return final, same, t0
+        *vcodec, "-c:a", "copy", str(joined)], cwd=work)
+    loud = loudnorm(joined, final)
+    return final, same, t0, loud
+
+LOUD_I, LOUD_TP, LOUD_LRA = -14.0, -1.0, 11.0     # QUALITY.md: -14 LUFS, true peak <= -1 dBTP
+
+def loudnorm(src, out):
+    """Two-pass EBU R128 loudness normalization of src's audio to LOUD_I / LOUD_TP (measure,
+    then apply as one linear gain where the peaks allow it); video is copied. A silent file
+    is copied as it is. Returns the first pass's measurement."""
+    target = f"I={LOUD_I}:TP={LOUD_TP - 0.5}:LRA={LOUD_LRA}"   # 0.5 dB for the AAC encoder
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(src), "-vn", "-af",
+                        f"loudnorm={target}:print_format=json", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr)
+    meas = json.loads(m.group(0)) if r.returncode == 0 and m else {}
+    try:
+        ok = float(meas.get("input_i", "-inf")) > -70
+    except ValueError:
+        ok = False
+    if not ok:                         # silence (or unmeasurable): nothing to normalize
+        sh(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
+        return {"input_i": meas.get("input_i"), "normalized": False}
+    af = (f"loudnorm={target}:measured_I={meas['input_i']}:measured_TP={meas['input_tp']}"
+          f":measured_LRA={meas['input_lra']}:measured_thresh={meas['input_thresh']}"
+          f":offset={meas['target_offset']}:linear=true")
+    sh(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", "copy", "-af", af, "-ar", "48000", "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart", str(out)])
+    return {"input_i": float(meas["input_i"]), "input_tp": float(meas["input_tp"]), "normalized": True}
 
 def render(slug, actor="cli"):
     need("ffmpeg")
@@ -2070,15 +2101,302 @@ def render(slug, actor="cli"):
         work = pdir(slug) / "render" / stamp
     work.mkdir(parents=True)
     try:
-        final, same, t0 = _render_parts(slug, st, tl, work, stamp)
+        final, same, t0, loud = _render_parts(slug, st, tl, work, stamp)
     finally:                           # a failed export leaves no parts behind
         shutil.rmtree(work, ignore_errors=True)
     dur = sum(c["out"] - c["in"] for c in tl["clips"])
     rel = str(final.relative_to(HOME))
     emit("render.done", None, project=slug, file=rel, duration=round(dur, 2),
          aspect=tl["aspect"], clips=len(tl["clips"]), sha256=receipt(final), actor=actor,
-         secs=round(time.monotonic() - t0, 2), concat="copy" if same else "reencode")
+         secs=round(time.monotonic() - t0, 2), concat="copy" if same else "reencode",
+         loudness=loud, timeline=tl)
     return final
+
+
+# ---------- check: does an export clear the bar? ------------------------------
+# `studio check` measures an export against QUALITY.md's hard rules, writes a review sheet
+# the agent can look at (filmstrip + waveform + words around every cut, a contact sheet of
+# the whole export), logs check.done, and lists the judgment rules for the agent to answer.
+
+CHECK_LEAD = (0.05, 0.15)       # lead-in before the first word of a spoken clip
+CHECK_TAIL = 0.25               # tail after the last word
+CHECK_FIRST_WORD = 0.5          # time to the first word of the export
+CHECK_PAUSE = 0.35              # longest pause inside speech
+CHECK_PAUSE_TOL = 0.04          # Silero hears in 32 ms windows: a measured gap is +-1 window
+CHECK_SHORTEST = 1.5            # shortest spoken piece
+CHECK_LENGTH = (15.0, 35.0, 60.0)   # good range, and the most any reel may be
+CHECK_CAPTIONS = 0.8            # word agreement (0-1) between captions and the re-heard audio
+CHECK_FREEZE = 2.0              # a picture that doesn't change for this long reads as frozen
+FILLERS = {"yeah", "so", "um", "uh", "umm", "uhm", "like", "okay", "ok", "and", "but", "anyway",
+           "alright", "right"}
+# A clip labelled with one of these words holds a still or a pause on purpose (QUALITY.md: "unless
+# the picture carries it and the clip is labelled as such").
+DELIBERATE = re.compile(r"\b(payoff|reveal|hold|still)\b", re.I)
+FONTS = ["/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/SFNS.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+
+def judgment_rules():
+    """QUALITY.md's judgment rules, one string each (they can't be measured)."""
+    p = HERE / "QUALITY.md"
+    if not p.exists():
+        return []
+    rules, on = [], False
+    for line in p.read_text().splitlines():
+        if line.startswith("## "):
+            on = line.lower().startswith("## judgment")
+            continue
+        if not on:
+            continue
+        if re.match(r"\d+\.\s", line):
+            rules.append(line.strip())
+        elif line.startswith("   ") and rules:
+            rules[-1] += " " + line.strip()
+    return [r.replace("**", "") for r in rules]
+
+def export_wav(path, out):
+    sh(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "pcm_s16le", "-f", "wav", str(out)])
+    return out
+
+def measure_loudness(path):
+    """(integrated LUFS, true peak dBTP) by ffmpeg's ebur128; None for either if unmeasurable."""
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(path), "-vn",
+                        "-af", "ebur128=peak=true", "-f", "null", "-"], capture_output=True, text=True)
+    summary = r.stderr.rpartition("Summary:")[2]
+    i = re.search(r"I:\s+(-?[\d.]+|-inf) LUFS", summary)
+    tp = re.search(r"Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
+    f = lambda m: float(m.group(1)) if m and m.group(1) != "-inf" else None
+    return f(i), f(tp)
+
+def detect_black_freeze(path):
+    """([(start, end)] black, [(start, end)] frozen) in the export, by blackdetect/freezedetect
+    on a small copy of the picture."""
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path), "-an", "-vf",
+                        f"scale=-2:320,blackdetect=d=0.1:pix_th=0.10,freezedetect=n=-60dB:d={CHECK_FREEZE}",
+                        "-f", "null", "-"], capture_output=True, text=True)
+    black = [(float(a), float(b)) for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", r.stderr)]
+    fs = [float(x) for x in re.findall(r"freeze_start: ([\d.]+)", r.stderr)]
+    fe = [float(x) for x in re.findall(r"freeze_end: ([\d.]+)", r.stderr)]
+    dur = probe(path)["duration"]
+    return black, [(a, fe[k] if k < len(fe) else dur) for k, a in enumerate(fs)]
+
+def _words_of(text):
+    return [w for w in (re.sub(r"[^a-z0-9]+", "", x.lower()) for x in text.split()) if w]
+
+def _in_region(t, regions, slack=0.01):
+    return next((r for r in regions if r[0] + slack < t < r[1] - slack), None)
+
+def export_for(st, slug, path=None):
+    """(export path, its render.done data or None). Default: the project's latest export."""
+    exports = (st["projects"].get(slug) or {}).get("exports") or []
+    if path is None:
+        if not exports:
+            raise RuntimeError(f"{slug} has no export yet (studio render {slug})")
+        ev = exports[-1]
+        return HOME / ev["file"], ev
+    p = Path(path).expanduser()
+    p = p if p.is_absolute() else (HOME / p if (HOME / p).exists() else p.resolve())
+    if not p.is_file():
+        raise RuntimeError(f"no file {path}")
+    ev = next((e for e in reversed(exports) if (HOME / e["file"]).resolve() == p.resolve()), None)
+    return p, ev
+
+def check(slug, path=None, actor="cli"):
+    """Measure one export against QUALITY.md's hard rules. Returns the result dict (also in
+    <export>.check/check.json, with the review sheet next to it) and logs check.done."""
+    need("ffmpeg"); need("whisper-cli")
+    st = state()
+    if slug not in st["projects"]:
+        raise RuntimeError(f"no project {slug}")
+    final, ev = export_for(st, slug, path)
+    tl = (ev or {}).get("timeline")
+    out_dir = final.with_name(final.stem + ".check")
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True)
+    dur = probe(final)["duration"]
+    rules = []
+    def rule(name, ok, detail, items=None):
+        rules.append({"rule": name, "status": ok if isinstance(ok, str) else ("pass" if ok else "fail"),
+                      "detail": detail, **({"items": items} if items else {})})
+
+    # where the cuts are, on the export's clock, and the speech each clip cuts
+    clips, t = [], 0.0
+    for c in (tl or {}).get("clips", []):
+        it = st["media"].get(c["media"], {})
+        regs = (ensure_speech(c["media"]) if it.get("has_audio") else []) or []
+        clips.append({**c, "at": t, "name": it.get("name"), "regions": regs})
+        t += c["out"] - c["in"]
+    clip_at = lambda x: next((c for c in reversed(clips) if c["at"] <= x + 1e-6), None)
+
+    # 1. spoken in/out points against the source's speech
+    if not tl:
+        rule("cuts", "skip", "not a studio render (or rendered before check existed): no cut list")
+    else:
+        bad, n = [], 0
+        for k, c in enumerate(clips, 1):
+            a, b, regs = c["in"], c["out"], c["regions"]
+            mine = [r for r in regs if r[1] > a and r[0] < b]
+            if sum(min(b, r[1]) - max(a, r[0]) for r in mine) < SNAP_EDGE:
+                continue                    # no speech in it: a silent shot
+            n += 1
+            r = _in_region(a, regs)
+            if r:
+                bad.append(f"clip {k} in {a:.2f}s is inside speech ({r[0]:.2f}-{r[1]:.2f})")
+            else:
+                lead = min([x[0] for x in mine if x[0] >= a - 0.011] or [a]) - a
+                if not CHECK_LEAD[0] - 0.005 <= lead <= CHECK_LEAD[1] + 0.005:
+                    bad.append(f"clip {k} lead-in {lead:.2f}s (want {CHECK_LEAD[0]}-{CHECK_LEAD[1]}s)")
+            r = _in_region(b, regs)
+            if r:
+                bad.append(f"clip {k} out {b:.2f}s is inside speech ({r[0]:.2f}-{r[1]:.2f}): "
+                           f"it ends at {r[1]:.2f}")
+            else:
+                tail = b - max([x[1] for x in mine if x[1] <= b + 0.011] or [b])
+                if tail < CHECK_TAIL - 0.005:
+                    bad.append(f"clip {k} tail {tail:.2f}s after the last word (want >= {CHECK_TAIL}s)")
+            if b - a < CHECK_SHORTEST:
+                bad.append(f"clip {k} is {b - a:.2f}s of speech (want >= {CHECK_SHORTEST}s)")
+        rule("cuts", not bad, f"{n} spoken clip{'s' if n != 1 else ''}: " +
+             ("every in/out on a speech edge" if not bad else f"{len(bad)} problem{'s' if len(bad) != 1 else ''}"
+              " (fix: studio timeline snap P CLIP|all)"), bad)
+
+    # 2-3. the export's own speech: first word, pauses
+    wav = export_wav(final, out_dir / ".audio.wav")
+    heard_regions = vad_regions(wav)
+    if heard_regions:
+        fw = heard_regions[0][0]
+        rule("first word", fw <= CHECK_FIRST_WORD, f"first word at {fw:.2f}s (want <= {CHECK_FIRST_WORD}s)")
+        long_ = []
+        for (a0, a1), (b0, b1) in zip(heard_regions, heard_regions[1:]):
+            gap, mid = b0 - a1, (a1 + b0) / 2
+            c = clip_at(mid)
+            if gap > CHECK_PAUSE + CHECK_PAUSE_TOL and not (c and DELIBERATE.search(c.get("label") or "")):
+                long_.append(f"{gap:.2f}s pause at {a1:.2f}s" + (f" (clip {clips.index(c) + 1})" if c else ""))
+        rule("pauses", not long_, f"longest pause {max([b0 - a1 for (_, a1), (b0, _) in zip(heard_regions, heard_regions[1:])] or [0]):.2f}s"
+             f" (want <= {CHECK_PAUSE}s inside speech)", long_)
+    else:
+        rule("first word", "skip", "no speech in the export (on-screen text can't be measured: judge it)")
+        rule("pauses", "skip", "no speech in the export")
+
+    # 4. length
+    lo, hi, most = CHECK_LENGTH
+    rule("length", "pass" if lo <= dur <= hi else ("warn" if hi < dur <= most else "fail"),
+         f"{dur:.1f}s (want {lo:g}-{hi:g}s; up to {most:g}s only if every beat earns it)")
+
+    # 5. loudness
+    li, tp = measure_loudness(final)
+    if li is None:
+        rule("loudness", False, "no sound to measure")
+    else:
+        ok = abs(li - LOUD_I) <= 1.0 and tp is not None and tp <= LOUD_TP
+        rule("loudness", ok, f"{li:.1f} LUFS, true peak {tp if tp is None else round(tp, 1)} dBTP "
+                             f"(want {LOUD_I:g} +-1 LUFS, <= {LOUD_TP:g} dBTP)")
+
+    # 6. black / frozen picture
+    black, frozen = detect_black_freeze(final)
+    meant = lambda a, b: (c := clip_at((a + b) / 2)) is not None and DELIBERATE.search(c.get("label") or "")
+    bad = [f"black {a:.2f}-{b:.2f}s" for a, b in black if not meant(a, b)] + \
+          [f"frozen {a:.2f}-{b:.2f}s" for a, b in frozen if not meant(a, b)]
+    rule("picture", not bad, "no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}", bad)
+
+    # 7-8. captions against what the export actually says; the last word
+    brand = (st["projects"].get(slug) or {}).get("brand") or "jefe"
+    vocab, fixes = brand_words(brand)
+    _, hsegs, heard = run_whisper(wav, out_dir / ".whisper", vocab, heard_regions)
+    hsegs, heard, _ = drop_hallucinations(hsegs, heard, wav)
+    apply_fixes(hsegs, heard, fixes + case_fixes(vocab))
+    wav.unlink(missing_ok=True)
+    if not tl:
+        rule("captions", "skip", "not a studio render: no caption list")
+    elif not tl.get("captions", True):
+        rule("captions", "skip", "captions are off")
+    else:
+        shown = []
+        for c in clips:
+            tr = load_json(mdir(c["media"]) / "transcript.json", {"words": []})
+            shown += [x for ch in caption_chunks(tr.get("words", []), tr.get("segments"), c["in"], c["out"])
+                      for x in _words_of(ch["text"])]
+        said = [x for w in heard for x in _words_of(w["w"])]
+        import difflib
+        sm = difflib.SequenceMatcher(None, shown, said, autojunk=False)
+        score = sm.ratio() if shown or said else 1.0
+        diffs = [f"captions {' '.join(shown[i1:i2]) or '(nothing)'!r} / audio {' '.join(said[j1:j2]) or '(nothing)'!r}"
+                 for op, i1, i2, j1, j2 in sm.get_opcodes() if op != "equal"][:8]
+        rule("captions", score >= CHECK_CAPTIONS,
+             f"{round(100 * score)}% of words agree ({len(shown)} on screen, {len(said)} heard; "
+             f"want >= {round(100 * CHECK_CAPTIONS)}%)", diffs)
+    said = [x for w in heard for x in _words_of(w["w"])]
+    if said:
+        rule("ending", said[-1] not in FILLERS and " ".join(said[-2:]) != "you know",
+             f"last word {heard[-1]['w']!r}" + (" is filler" if said[-1] in FILLERS else ""))
+    else:
+        rule("ending", "skip", "no speech in the export")
+
+    # the review sheet: around every cut (and the first and last 1.5 s), then the whole thing
+    edges = [0.0] + [c["at"] for c in clips[1:]] + [dur]
+    sheets = []
+    for k, x in enumerate(edges):
+        a0, a1 = max(0.0, x - 1.5), min(dur, x + 1.5)
+        if a1 - a0 < 0.2:
+            continue
+        what = "start" if k == 0 else "end" if k == len(edges) - 1 else f"cut {k}: clip {k} -> {k + 1}"
+        name = f"cut-{k:02d}-{x:06.2f}s.png"
+        try:
+            cut_sheet(final, out_dir / name, a0, a1, x, heard, heard_regions, f"{what} at {x:.2f}s")
+            sheets.append(name)
+        except RuntimeError as e:
+            print(f"    review sheet {name} failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
+    try:
+        contact_sheet(final, out_dir / "contact.png", dur)
+        sheets.append("contact.png")
+    except RuntimeError as e:
+        print(f"    contact sheet failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
+
+    failed = [r["rule"] for r in rules if r["status"] == "fail"]
+    rel = lambda p: str(p.relative_to(HOME)) if p.resolve().is_relative_to(HOME.resolve()) else str(p)
+    res = {"project": slug, "file": rel(final), "ok": not failed, "failed": failed,
+           "duration": round(dur, 2), "rules": rules, "sheet": rel(out_dir), "images": sheets,
+           "judgment": judgment_rules(),
+           "heard": " ".join(w["w"] for w in heard)}
+    (out_dir / "check.json").write_text(json.dumps(res, indent=1))
+    emit("check.done", None, project=slug, file=res["file"], ok=res["ok"], failed=failed,
+         rules=[{k: v for k, v in r.items() if k != "items"} for r in rules], sheet=res["sheet"],
+         actor=actor)
+    return res
+
+def _font():
+    f = next((x for x in FONTS if Path(x).exists()), None)
+    return f"fontfile={f}:" if f else ""
+
+def _dt(text):
+    """Text safe inside a drawtext='...' in a filtergraph."""
+    return re.sub(r"[^\w .?!\-+>()#]", "", text)[:80]
+
+def cut_sheet(path, out, a0, a1, cut, words, regions, title):
+    """One review image for the stretch a0-a1 of an export: a header, 12 frames, the waveform
+    (speech regions as a green bar), the words heard where they were said, a red line at the cut."""
+    W, n, span = 1620, 12, a1 - a0
+    x = lambda t: int(round((min(max(t, a0), a1) - a0) / span * W))
+    font = _font()
+    bars = ",".join(f"drawbox=x={x(r[0])}:y=150:w={max(2, x(r[1]) - x(r[0]))}:h=10:color=0x34c759:t=fill"
+                    for r in regions if r[1] > a0 and r[0] < a1) or "null"
+    labels = ",".join(f"drawtext={font}text='{_dt(w['w'])}':x={x(w['start'])}:y={6 + 26 * (k % 2)}"
+                      f":fontsize=22:fontcolor=white"
+                      for k, w in enumerate(w for w in words if a0 <= w["start"] < a1) if _dt(w["w"])) or "null"
+    g = (f"[0:v]fps={n / span:.4f},scale={W // n}:-2,setsar=1,tile={n}x1,format=rgb24[fs];"
+         f"[0:a]aformat=channel_layouts=mono,showwavespic=s={W}x160:colors=0x9fd3ff:scale=sqrt,format=rgb24,{bars}[wv];"
+         f"color=c=0x111111:s={W}x60:d=1,format=rgb24,{labels}[lb];"
+         f"color=c=0x222222:s={W}x36:d=1,format=rgb24,drawtext={font}text='{_dt(title)}':x=8:y=7:fontsize=22:fontcolor=white[hd];"
+         f"[hd][fs][wv][lb]vstack=inputs=4,drawbox=x={max(0, x(cut) - 1)}:y=36:w=2:h=ih:color=red:t=fill")
+    sh(["ffmpeg", "-y", "-v", "error", "-ss", f"{a0:.3f}", "-t", f"{span:.3f}", "-i", str(path),
+        "-filter_complex", g, "-frames:v", "1", str(out)])
+
+def contact_sheet(path, out, dur, n=24):
+    """The whole export as 24 frames (6 x 4), each stamped with its time."""
+    sh(["ffmpeg", "-y", "-v", "error", "-i", str(path), "-vf",
+        f"fps={n / max(dur, 0.1):.4f},scale=180:-2,drawtext={_font()}text='%{{pts\\:hms}}':x=4:y=4"
+        f":fontsize=18:fontcolor=white:box=1:boxcolor=black@0.5,tile=6x{math.ceil(n / 6)}",
+        "-frames:v", "1", str(out)])
 
 
 # ---------- share: bundle / import ------------------------------------------
@@ -3135,6 +3453,31 @@ def cmd_words(a):
     for w in ws:
         print(f"{w['start']:8.2f} {w['end']:8.2f}  {w['w']}")
 
+def cmd_check(a):
+    try:
+        r = check(a.project, a.export, actor=actor_now())
+    except RuntimeError as e:
+        sys.exit(f"studio check: {e}")
+    if a.json:
+        print(json.dumps(r, indent=1))
+    else:
+        mark = {"pass": "pass", "fail": "FAIL", "warn": "warn", "skip": "skip"}
+        print(f"check {r['file']}  ({r['duration']:.1f}s)")
+        for x in r["rules"]:
+            print(f"  {mark[x['status']]:<4}  {x['rule']:<10}  {x['detail']}")
+            for i in x.get("items", []):
+                print(f"              - {i}")
+        print(f"\nreview sheet: {HOME / r['sheet'] if not Path(r['sheet']).is_absolute() else r['sheet']}")
+        print("  cut-*.png: frames, waveform (green = speech) and the words heard, 1.5s either side of "
+              "each cut (red line); contact.png: the whole export. Look at them.")
+        print("\njudgment (answer each honestly before telling the operator it's done; a no sends it back):")
+        for j in r["judgment"]:
+            print(f"  {j}")
+        print("\n" + ("PASS: every hard rule holds" if r["ok"] else
+                      f"FAIL: {', '.join(r['failed'])}. Fix, render and check again."))
+    if not r["ok"]:
+        sys.exit(1)
+
 def cmd_bundle(a):
     print(f"bundling into {a.out}")
     try:
@@ -3216,6 +3559,9 @@ def main():
     p.add_argument("--no-snap", action="store_true",
                    help="add MEDIA@N: keep the moment's times exactly (snapped by default)")
     p = sub.add_parser("render"); p.add_argument("project")
+    p = sub.add_parser("check", help="measure an export against QUALITY.md; review sheet; exit 1 on a fail")
+    p.add_argument("project"); p.add_argument("export", nargs="?", help="a render path (default: the latest)")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("notes"); p.add_argument("-p", "--project")
     p.add_argument("--json", action="store_true"); p.add_argument("--since", metavar="TS")
     p.add_argument("--unread", action="store_true", help="only notes newer than the last read")
@@ -3291,6 +3637,8 @@ def main():
         cmd_timeline(a)
     elif a.cmd == "render":
         print(render(a.project, actor=actor_now()))
+    elif a.cmd == "check":
+        cmd_check(a)
     elif a.cmd == "notes":
         cmd_notes(a)
     elif a.cmd == "say":
