@@ -9,7 +9,7 @@ Needs Safari's remote automation, which macOS only lets an admin turn on, once:
     sudo safaridriver --enable
 
 Without it this prints that command and exits 0 (skipped). Ports come from
-$STUDIO_TEST_PORTS (default 7400-7499). `claude -p` is test/fakebin/claude.
+$STUDIO_TEST_PORTS (default 7400-7499). The agent is test/fakebin/fake-agent (STUDIO_AGENT_CMD).
 """
 import base64, json, os, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
@@ -135,6 +135,7 @@ def main():
     port = Hn.free_port()
     env = Hn.env_for(home)
     env["PATH"] = str(TEST / "fakebin") + ":" + env["PATH"]
+    env["STUDIO_AGENT_CMD"] = "fake-agent"
     srv = subprocess.Popen([sys.executable, str(ROOT / "studio.py"), "ui", "--port", str(port), "--no-open"], env=env,
                            stdout=open(Path(F) / "srv.log", "w"), stderr=subprocess.STDOUT)
     B = f"http://127.0.0.1:{port}"
@@ -153,10 +154,10 @@ def main():
         return json.loads(urllib.request.urlopen(urllib.request.Request(B + path, data=json.dumps(body).encode() if body is not None else None,
                           method="POST" if body is not None else "GET", headers={"Content-Type": "application/json"}), timeout=10).read())
 
-    def cli(*a, claude=False):
+    def cli(*a, agent=False):
         e = dict(env)
-        if claude:
-            e["CLAUDECODE"] = "1"
+        if agent:
+            e["STUDIO_ACTOR"] = "agent"
         return subprocess.run([sys.executable, str(ROOT / "studio.py"), *a], env=e, capture_output=True, text=True)
 
     try:

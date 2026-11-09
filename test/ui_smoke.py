@@ -2,10 +2,10 @@
 
     cd forge/studio && nix develop -c python3 test/ui_smoke.py      (~1 min)
 
-Empty studio -> drop 3 files -> "Find moments in all" -> add moments to the Story -> Tell Claude
-(+ Claude reads, replies) -> Claude removes a clip from the CLI -> Export -> Copy post -> edit a
-post -> reload -> Restore. `claude -p` is replaced by test/fakebin/claude (canned JSON), so no
-subscription is spent. Screenshots + server log land in the temp dir it prints. Ports: two free
+Empty studio -> drop 3 files -> "Find moments in all" -> add moments to the Story -> Tell the
+agent (+ the agent reads, replies) -> the agent removes a clip from the CLI -> Export -> Copy post
+-> edit a post -> reload -> Restore. The agent is test/fakebin/fake-agent (STUDIO_AGENT_CMD,
+canned JSON), so no subscription is spent. Screenshots + server log land in the temp dir it prints. Ports: two free
 ones from $STUDIO_TEST_PORTS (default 7400-7499) for the studio and Chrome's debugger.
 """
 import json, os, subprocess, sys, tempfile, time, urllib.request, shutil
@@ -24,8 +24,8 @@ HOME = F + "/ui-home"
 os.makedirs(HOME + "/fx")
 for f in ("phone-talking.mov", "site-walk.mov", "screen-recording.mp4"):
     shutil.copy(f"{FX}/{f}", f"{HOME}/fx/{f}")
-env = {**os.environ, "STUDIO_HOME": HOME, "PATH": str(TEST / "fakebin") + ":" + os.environ["PATH"]}
-env.pop("CLAUDECODE", None)
+env = {**Hn.env_for(HOME), "PATH": str(TEST / "fakebin") + ":" + os.environ["PATH"],
+       "STUDIO_AGENT_CMD": "fake-agent"}
 srv = subprocess.Popen([sys.executable, f"{ROOT}/studio.py", "ui", "--port", str(PORT), "--no-open"], env=env,
                        stdout=open(F + "/ui-srv.log", "w"), stderr=subprocess.STDOUT)
 B = f"http://127.0.0.1:{PORT}"
@@ -36,9 +36,9 @@ def api(path, body=None, m=None):
     r = urllib.request.Request(B + path, data=json.dumps(body).encode() if body is not None else None,
                                method=m or ("POST" if body is not None else "GET"), headers={"Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(r).read())
-def cli(*a, claude=False):
-    e = dict(env); 
-    if claude: e["CLAUDECODE"] = "1"
+def cli(*a, agent=False):
+    e = dict(env)
+    if agent: e["STUDIO_ACTOR"] = "agent"
     r = subprocess.run([sys.executable, f"{ROOT}/studio.py", *a], env=e, capture_output=True, text=True)
     return r
 results = []
@@ -56,6 +56,9 @@ try:
     c.call("Page.navigate", url=B + "/"); c.pump(2)
     c.js("localStorage.clear()"); c.call("Page.reload"); c.pump(2)
     body = c.js("document.body.innerText")
+    h = api("/api/health")
+    check("health names the agent (STUDIO_AGENT_CMD's fake-agent, found on PATH)",
+          h["agent"]["name"] == "custom" and h["tools"]["agent"] == str(TEST / "fakebin/fake-agent"), h.get("agent"))
     check("empty: no 'null' text", "null" not in body, body[:200])
     # dragenter text
     c.js("""(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.mov', {type:'video/quicktime'}));
@@ -92,8 +95,8 @@ try:
     # find-all button
     fa = c.js("(() => { const b = document.querySelector('#btn-find-all'); return b && !b.hidden ? b.textContent : null })()")
     check("'Find moments in all N' visible", fa and "all 3" in fa, fa)
-    claude_tab_cta = c.js("document.querySelector('#tab-clip').innerText")
-    check("empty Clip tab offers the find-moments CTA", "Find moments" in claude_tab_cta, claude_tab_cta[:120])
+    clip_tab_cta = c.js("document.querySelector('#tab-clip').innerText")
+    check("empty Clip tab offers the find-moments CTA", "Find moments" in clip_tab_cta, clip_tab_cta[:120])
     # Q7: the Footage header wraps instead of clipping "+ Add footage" (with the find button showing)
     clip_js = """(() => { const b = document.querySelector('#btn-add-footage'), p = document.querySelector('#bin').getBoundingClientRect(), r = b.getBoundingClientRect();
       return {sw: b.scrollWidth, cw: b.clientWidth, right: r.right, pane: p.right, txt: b.innerText} })()"""
@@ -118,7 +121,7 @@ try:
     c.pump(2)
     tt = c.js("document.querySelector('#toasts').innerText")
     check("find-all ends with 'Moments found in 3 files. Click a file to see them'", "Moments found in 3 files. Click a file to see them" in tt, tt)
-    check("...not one 'posts ready' nudge per file", "Post drafts are ready" not in tt and "Claude found" not in tt, tt)
+    check("...not one 'posts ready' nudge per file", "Post drafts are ready" not in tt and "agent found" not in tt, tt)
     first = sorted(api("/api/state")["media"].values(), key=lambda m: m["name"])[0]
     sel_media = c.js("window.__studio.S.media")
     mom_txt = c.js("document.querySelector('#moments').innerText")
@@ -138,41 +141,41 @@ try:
     slug = c.js("window.__studio.S.slug")
     tl = api("/api/state")["projects"][slug]["timeline"]
     check("moments added to story", len(tl["clips"]) == 2, tl)
-    # select clip 2, check Tell Claude tab
+    # select clip 2, check the Tell the agent tab
     c.js("window.__studio && import('/ui/store.js').then(s => s.select(s.S.tl.clips[1].id))"); c.pump(0.5)
-    c.js("document.querySelector('.tab[data-tab=claude]').click()"); c.pump(0.5)
-    ct = c.js("document.querySelector('#tab-claude').innerText")
-    check("Tell Claude: no 'null'", "null" not in ct, ct[:300])
-    c.js("(() => { const t = document.querySelector('#tab-claude textarea'); t.value = 'Make this one start on the word privacy'; t.dispatchEvent(new Event('input')); [...document.querySelectorAll('#tab-claude button')].find(b => b.textContent.includes('Send')).click(); })()")
+    c.js("document.querySelector('.tab[data-tab=agent]').click()"); c.pump(0.5)
+    ct = c.js("document.querySelector('#tab-agent').innerText")
+    check("Tell the agent: no 'null'", "null" not in ct, ct[:300])
+    c.js("(() => { const t = document.querySelector('#tab-agent textarea'); t.value = 'Make this one start on the word privacy'; t.dispatchEvent(new Event('input')); [...document.querySelectorAll('#tab-agent button')].find(b => b.textContent.includes('Send')).click(); })()")
     c.pump(1.5)
     out = cli("notes").stdout
     check("studio notes carries the selection (1-based, as the UI says)", "→ clip 2" in out and "playhead" in out, out)
     nid = json.loads(cli("notes", "--json").stdout)[-1]["id"]
-    cli("notes", claude=True)
-    cli("say", "On it — trimming clip 2 now.", "--re", nid, claude=True)
+    cli("notes", agent=True)
+    cli("say", "On it — trimming clip 2 now.", "--re", nid, agent=True)
     c.pump(1.5)
-    ct = c.js("document.querySelector('#tab-claude').innerText")
-    check("thread shows 'Claude saw this' and the reply", "Claude saw this" in ct and "On it" in ct, ct[-300:])
+    ct = c.js("document.querySelector('#tab-agent').innerText")
+    check("thread shows 'the agent saw this' and the reply", "the agent saw this" in ct and "On it" in ct, ct[-300:])
     toasts = c.js("document.querySelector('#toasts').innerText")
-    check("Claude's reply toasts", "On it" in toasts, toasts)
-    c.shot(F + "/s-claude.png")
+    check("the agent's reply toasts", "On it" in toasts, toasts)
+    c.shot(F + "/s-agent.png")
     # captions off -> no null in tag
     c.js("document.querySelector('#captions-toggle').click()"); c.pump(0.6)
     tag = c.js("document.querySelector('#stage-format-tag').innerText")
     check("captions off: format tag has no 'null'", "null" not in tag, tag)
     c.js("document.querySelector('#captions-toggle').click()"); c.pump(0.8)
-    # Claude removes clip 0 -> diff toast + ghost
+    # the agent removes clip 0 -> diff toast + ghost
     first = api("/api/state")["projects"][slug]["timeline"]["clips"][0]
-    r = cli("timeline", "rm", slug, first["id"][:6], claude=True)
+    r = cli("timeline", "rm", slug, first["id"][:6], agent=True)
     check("CLI rm by id prefix", r.returncode == 0, r.stderr)
     seen = None
     for _ in range(30):
         c.pump(0.1)
         t = c.js("document.querySelector('#toasts').innerText")
         g = c.js("document.querySelectorAll('.clip-ghost').length")
-        if "Claude removed" in t:
+        if "The agent removed" in t:
             seen = (t, g); break
-    check("toast says what Claude removed", seen and "Claude removed" in seen[0], seen)
+    check("toast says what the agent removed", seen and "The agent removed" in seen[0], seen)
     check("ghost marks the removed clip", seen and seen[1] >= 1, seen)
     c.shot(F + "/s-removed.png")
     # export: button state right after click
@@ -203,7 +206,7 @@ try:
     c.call("Page.reload"); c.pump(2.5)
     c.js("document.querySelector('.tab[data-tab=activity]').click()"); c.pump(0.5)
     act = c.js("document.querySelector('#tab-activity').innerText")
-    check("activity explains Claude's edit", "removed" in act, act[:400])
+    check("activity explains the agent's edit", "removed" in act, act[:400])
     nrest = c.js("document.querySelectorAll('#tab-activity .restore').length")
     check("Restore offered after reload", nrest >= 1, nrest)
     before = len(api("/api/state")["projects"][slug]["timeline"]["clips"])
@@ -273,7 +276,7 @@ try:
     check("'Keep only this' trims and seeks the preview to the trimmed clip",
           after_keep["ph"] < 0.05 and abs(after_keep["in"] - tx["words"][span_ix[0]]["start"]) < 0.3 and abs(after_keep["t"] - after_keep["in"]) < 0.4 and after_keep["mode"] == "story", after_keep)
 
-    # Q1c/d: double-click a word to fix it; the UI refetches on transcript.edited (also Claude's)
+    # Q1c/d: double-click a word to fix it; the UI refetches on transcript.edited (also the agent's)
     wi = span_ix[1]
     c.js(f"document.querySelector('#transcript .w[data-i=\"{wi}\"]').dispatchEvent(new MouseEvent('dblclick', {{bubbles: true}}))"); c.pump(0.3)
     ed = c.js("(() => { const i = document.querySelector('#transcript .w-edit input.w-edit-in'); return i && {v: i.value, focus: document.activeElement === i} })()")
@@ -284,9 +287,9 @@ try:
     check("the fixed word shows in the Words tab", got)
     tx2 = api(f"/api/transcript/{sw}")
     check("...and is saved to the transcript", "Zzyzx" in tx2["words"][wi]["w"], tx2["words"][wi])
-    r = cli("words", sw, "--fix", "Zzyzx", "Quixote", claude=True)
+    r = cli("words", sw, "--fix", "Zzyzx", "Quixote", agent=True)
     got = wait(lambda: c.js(f"document.querySelector('#transcript .w[data-i=\"{wi}\"]')?.textContent.includes('Quixote')"), 10, 0.2)
-    check("Claude's `studio words --fix` reaches the open Words tab (no reload)", r.returncode == 0 and got, r.stdout + r.stderr)
+    check("the agent's `studio words --fix` reaches the open Words tab (no reload)", r.returncode == 0 and got, r.stdout + r.stderr)
     capfix = c.js(f"(async () => {{ const st = await import('/ui/store.js'); const {{player}} = await import('/ui/player.js'); return player.chunksFor(st.S.tl.clips[0]).map(x => x.text).join(' '); }})()")
     check("...and the preview captions use it", "Quixote" in (capfix or ""), capfix)
 
@@ -303,19 +306,19 @@ try:
     check("'Fill the frame' saves fit=fill and the preview crops", srv_clip.get("fit") == "fill" and not fitst["fit"] and fitst["of"] == "cover", (srv_clip, fitst))
     c.shot(F + "/s-fit.png")
 
-    # S3: the first edit on a never-saved project, while Claude edits it too: both survive
+    # S3: the first edit on a never-saved project, while the agent edits it too: both survive
     c.js("""(() => { window.__puts = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'PUT') window.__puts.push(String(u)); return f(u, o); }; })()""")
     fresh = api("/api/projects", {"name": "Race"})["slug"]
     c.js(f"(async () => {{ const live = await import('/ui/live.js'); await live.refresh(); const st = await import('/ui/store.js'); st.setProject('{fresh}'); }})()"); c.pump(0.8)
     c.js(f"(async () => {{ {J} const [tl] = ops.insert(st.S.tl, null, {{media: '{sw}', in: 1, out: 4}}); st.commit(tl, 'mine'); st.S.gesture = st.S.tl; }})()")
-    r = cli("timeline", "add", fresh, sr, "2", "5", claude=True)
+    r = cli("timeline", "add", fresh, sr, "2", "5", agent=True)
     c.pump(1.5)
     c.js("(async () => { const st = await import('/ui/store.js'); st.S.gesture = null; await st.saveNow(); })()"); c.pump(2)
     fin = api("/api/state")["projects"][fresh]["timeline"]["clips"]
     puts = c.js("window.__puts")
     tt = c.js("document.querySelector('#toasts').innerText")
     check("first save of a new project carries ?base=0", r.returncode == 0 and puts and "base=0" in puts[0], puts)
-    check("...gets the 409, merges, and keeps Claude's clip and mine", sorted(x["media"] for x in fin) == sorted([sw, sr]), fin)
+    check("...gets the 409, merges, and keeps the agent's clip and mine", sorted(x["media"] for x in fin) == sorted([sw, sr]), fin)
     check("...and says so", "Both changes are kept" in tt, tt)
 
     body = c.js("document.body.innerText")

@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+# Fake `codex exec ... -o FILE -` (the codex adapter's surface): prompt on stdin, the last
+# message written to the -o file, progress chatter on stdout/stderr like the real one.
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import canned
+a = sys.argv[1:]
+if not a or a[0] != "exec" or a[-1] != "-" or "-o" not in a:
+    sys.exit(f"fake codex: unexpected args {a}")
+p = sys.stdin.read()
+canned.record(sys.argv, p)
+print("codex: thinking…", file=sys.stderr)
+if os.environ.get("FAKE_AGENT_FAIL"):
+    sys.exit("ERROR: not logged in")
+open(a[a.index("-o") + 1], "w").write(canned.reply(p))
+print("tokens used: 123")

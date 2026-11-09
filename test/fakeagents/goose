@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+# Fake `goose run --no-session --quiet --output-format json -i -` (the goose adapter's
+# surface): prompt on stdin, the session's messages as JSON on stdout.
+import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import canned
+a = sys.argv[1:]
+if a[:1] != ["run"] or "--output-format" not in a or a[a.index("-i") + 1] != "-":
+    sys.exit(f"fake goose: unexpected args {a}")
+p = sys.stdin.read()
+canned.record(sys.argv, p)
+msgs = [{"role": "user", "content": [{"type": "text", "text": p}]},
+        {"role": "assistant", "content": [{"type": "toolRequest", "id": "t1"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Here you go.\n"}, {"type": "text", "text": canned.reply(p)}]}]
+print(json.dumps({"messages": msgs, "metadata": {"status": "completed"}}))

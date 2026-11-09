@@ -258,7 +258,7 @@ def synth_events(src_home, dst_home, n):
                 clips.append({"id": f"{i:05d}{j:03d}", "media": v["media"], "in": round(a, 3),
                               "out": round(a + 2.2, 3), **({"label": f"take {j}"} if j % 2 else {})})
             ev = {"type": "timeline.saved", "media": None,
-                  "data": {"project": slugs[i % len(slugs)], "actor": "operator" if i % 3 else "claude",
+                  "data": {"project": slugs[i % len(slugs)], "actor": "operator" if i % 3 else ("agent" if i % 2 else "claude"),
                            "timeline": {"aspect": "9:16", "captions": True, "clips": clips}}}
         elif k == 6:
             ev = {"type": "note", "media": None,
@@ -323,7 +323,7 @@ def bench_state_and_sse(src_home, R, n_events, n_edits):
                 args = (["timeline", "add", slug, vid, "0", "2"] if i % 2 == 0
                         else ["timeline", "rm", slug, "1"])
                 t0 = time.time()
-                H.cli(home, *args, actor_claude=True)
+                H.cli(home, *args, as_agent=True)
                 t1 = time.time()
                 pred = lambda e: e["type"] == "timeline.saved" and e["data"]["project"] == slug
                 t_sse, ev = sse.wait_for(pred, since=n0, timeout=5)

@@ -4,7 +4,7 @@
 
 Launches the app the way the Dock does (`open`, so it gets launchd's bare environment, not
 this shell's) with STUDIO_HOME on a throwaway library, ports from $STUDIO_TEST_PORTS
-(default 7400-7499), test/fakebin first on PATH (no subscription spent), and
+(default 7400-7499), test/fakebin first on PATH and STUDIO_AGENT_CMD=fake-agent (no subscription spent), and
 STUDIO_APP_DEVHOOK, which lets this script run JS in the page, snapshot the webview and drop
 files through the window's real NSDraggingDestination methods. That works with the screen
 locked; no mouse, keyboard or screenshot permission is needed.
@@ -71,7 +71,7 @@ class AppDriver:
             (self.hook / sub).mkdir(parents=True, exist_ok=True)
         before = set(app_pids())
         env = [f"STUDIO_HOME={home}", f"STUDIO_APP_PORTS={PORTS}", f"STUDIO_APP_DEVHOOK={hook}",
-               f"PATH={FAKE_PATH}", "STUDIO_SETTLE_SECS=0.5", *extra_env]
+               f"PATH={FAKE_PATH}", "STUDIO_AGENT_CMD=fake-agent", "STUDIO_SETTLE_SECS=0.5", *extra_env]
         cmd = ["open", "-n", str(APP)]
         for e in env:
             cmd += ["--env", e]
@@ -190,17 +190,18 @@ def _main():
 
     env = Hn.env_for(home)
     env["PATH"] = str(TEST / "fakebin") + ":" + env["PATH"]
+    env["STUDIO_AGENT_CMD"] = "fake-agent"
 
-    def cli(*a, claude=False):
+    def cli(*a, agent=False):
         e = dict(env)
-        if claude:
-            e["CLAUDECODE"] = "1"
+        if agent:
+            e["STUDIO_ACTOR"] = "agent"
         return subprocess.run([sys.executable, str(ROOT / "studio.py"), *a], env=e, capture_output=True, text=True)
 
     h = api("/api/health")
     check("server tools are pinned nix store paths", all(str(h["tools"][t]).startswith("/nix/store/") for t in ("ffmpeg", "whisper-cli")), h["tools"])
-    check("`claude` resolved on the server's PATH (fakebin first here; a Dock launch gets the login shell's)",
-          h["tools"]["claude"] == str(TEST / "fakebin/claude"), h["tools"]["claude"])
+    check("the agent CLI resolved on the server's PATH (fakebin first here; a Dock launch gets the login shell's)",
+          h["tools"]["agent"] == str(TEST / "fakebin/fake-agent"), h["tools"]["agent"])
     info = None
     Hn_wait(lambda: d.js("return location.protocol") == "http:", 30, 0.3)
     info = d.js("return await window.__TAURI__.core.invoke('app_info')")
@@ -218,8 +219,8 @@ def _main():
 
     # ⌘Z routing as the Edit menu does it: in a text field, the text; elsewhere, the story
     r = d.js("""const sleep = ms => new Promise(r => setTimeout(r, ms));
-      document.querySelector('.tab[data-tab=claude]').click(); await sleep(300);
-      const ta = document.querySelector('#tab-claude textarea'); ta.focus(); ta.value = '';
+      document.querySelector('.tab[data-tab=agent]').click(); await sleep(300);
+      const ta = document.querySelector('#tab-agent textarea'); ta.focus(); ta.value = '';
       document.execCommand('insertText', false, 'hello there');
       const n0 = window.__studio.S.tl.clips.length, typed = ta.value;
       await window.__TAURI__.event.emit('studio://menu', 'undo'); await sleep(300);

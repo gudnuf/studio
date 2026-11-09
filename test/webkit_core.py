@@ -168,24 +168,24 @@ def run(d, check, api, cli, files, mute=False):
     subprocess.run(["pbcopy"], input=saved, text=True)
     check(f"{d.name}: Copy puts the text on the Mac's clipboard", got == want, (want, got))
 
-    # --- Tell Claude, and Claude's CLI edits arriving live (EventSource) ---
-    d.js("document.querySelector('.tab[data-tab=claude]').click(); return 1"); time.sleep(0.5)
-    d.js("const t = document.querySelector('#tab-claude textarea'); t.value = 'Shorter please'; t.dispatchEvent(new Event('input'));"
-         "[...document.querySelectorAll('#tab-claude button')].find(b => b.textContent.includes('Send')).click(); return 1")
+    # --- Tell the agent, and the agent's CLI edits arriving live (EventSource) ---
+    d.js("document.querySelector('.tab[data-tab=agent]').click(); return 1"); time.sleep(0.5)
+    d.js("const t = document.querySelector('#tab-agent textarea'); t.value = 'Shorter please'; t.dispatchEvent(new Event('input'));"
+         "[...document.querySelectorAll('#tab-agent button')].find(b => b.textContent.includes('Send')).click(); return 1")
     time.sleep(1.2)
     nid = json.loads(cli("notes", "--json").stdout)[-1]["id"]
-    cli("say", "On it.", "--re", nid, claude=True)
+    cli("say", "On it.", "--re", nid, agent=True)
     got = wait(lambda: "On it" in (d.js("return document.querySelector('#toasts').innerText") or ""), 8, 0.3)
-    check("Claude's reply arrives live (SSE) as a toast", got)
+    check("the agent's reply arrives live (SSE) as a toast", got)
     first = api("/api/state")["projects"][slug]["timeline"]["clips"][0]
-    cli("timeline", "rm", slug, first["id"][:6], claude=True)
-    got = wait(lambda: "Claude removed" in (d.js("return document.querySelector('#toasts').innerText") or ""), 8, 0.2)
+    cli("timeline", "rm", slug, first["id"][:6], agent=True)
+    got = wait(lambda: "The agent removed" in (d.js("return document.querySelector('#toasts').innerText") or ""), 8, 0.2)
     if frames:
-        check("Claude's CLI edit shows up live: 'Claude removed …'", got)
+        check("the agent's CLI edit shows up live: 'The agent removed …'", got)
     else:   # the edit itself must still arrive over the event stream
-        check("Claude's CLI edit reaches the page live (SSE)",
+        check("the agent's CLI edit reaches the page live (SSE)",
               wait(lambda: d.js("return window.__studio.S.tl.clips.length") == len(api("/api/state")["projects"][slug]["timeline"]["clips"]), 8, 0.3))
-    d.snap("w-claude")
+    d.snap("w-agent")
 
     # --- export ---
     d.click("#btn-export")

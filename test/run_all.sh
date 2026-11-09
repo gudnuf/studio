@@ -38,7 +38,9 @@ export STUDIO_TEST_TMP=${STUDIO_TEST_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/studio-te
 export STUDIO_FIXTURES=${STUDIO_FIXTURES:-${XDG_CACHE_HOME:-$HOME/.cache}/studio-fixtures}
 mkdir -p "$STUDIO_TEST_TMP"
 logs="$STUDIO_TEST_TMP/logs"; mkdir -p "$logs"
-unset CLAUDECODE   # tests set it explicitly where the actor matters
+# tests say explicitly when they are the agent, and which agent the AI steps call
+unset CLAUDECODE CODEX_THREAD_ID CODEX_SANDBOX GOOSE_TERMINAL STUDIO_ACTOR \
+  STUDIO_AGENT STUDIO_AGENT_CMD STUDIO_AGENT_MODEL STUDIO_MOMENTS_MODEL STUDIO_CLAUDE_MODEL
 cd "$root"
 
 declare -a names results times

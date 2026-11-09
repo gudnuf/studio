@@ -1,7 +1,7 @@
 # studio UI smoke + perf script
 
-A step-by-step script for a human or a browser-driving agent (Claude in Chrome) to check that
-the desktop studio feels smooth for a novice and stays in live sync with Claude. Run it after
+A step-by-step script for a human or a browser-driving agent (e.g. Claude in Chrome) to check that
+the desktop studio feels smooth for a novice and stays in live sync with the agent. Run it after
 `test/run_all.sh` passes. Element ids are taken from `ui/index.html` at the time of writing.
 If an id has moved, find the control by its tooltip text (`data-tip`) and update this file.
 
@@ -125,7 +125,7 @@ Someone who has never edited video should be able to do all of this without read
 13. **Posts.** `#tab-posts`: drafts are shown per moment (short / X / LinkedIn / title, plus newsletter
     and ideas). Each copy button puts the text on the clipboard (check with
     `navigator.clipboard.readText()`) and shows "copied".
-14. **Leave Claude a note.** `#tab-claude`: type "tighten the open on clip 1" and send. It shows in
+14. **Leave the agent a note.** `#tab-agent`: type "tighten the open on clip 1" and send. It shows in
     the activity list. In a terminal, `STUDIO_HOME=$T/seeded ./studio notes` prints it.
 15. **Reload survives.** Reload the page. The story, format, captions and selected project come back the same.
 
@@ -135,22 +135,22 @@ Run these in a terminal next to the browser: `export STUDIO_HOME=$T/seeded`.
 Before each step, run `__perf.watch('#story')` (or `#tl-track`) in the page.
 
 1. **Connection.** `#conn` shows live (green or "connected"). The `Activity` tab (`#tab-activity`) lists
-   recent events, with who did each one: you / Claude.
-2. **Claude adds a clip.** Run `CLAUDECODE=1 ./studio timeline add jefe-shoot <site-walk id>@2` and
+   recent events, with who did each one: you / Agent.
+2. **The agent adds a clip.** Run `STUDIO_ACTOR=agent ./studio timeline add jefe-shoot <site-walk id>@2` and
    note `date +%s.%N` as the command exits. The story gains the clip **without a reload**. The time from
-   exit to the first `__perf.sse` entry is < 1 s. The activity entry is attributed to Claude, and
+   exit to the first `__perf.sse` entry is < 1 s. The activity entry is attributed to the agent, and
    `#activity-dot` pulses.
-3. **Claude trims what the operator is looking at.** In the UI, select clip 0. `./studio focus` prints
-   JSON naming that project/clip and the playhead. Then run `CLAUDECODE=1 ./studio timeline trim jefe-shoot 0 1 4`:
+3. **The agent trims what the operator is looking at.** In the UI, select clip 0. `./studio focus` prints
+   JSON naming that project/clip and the playhead. Then run `STUDIO_ACTOR=agent ./studio timeline trim jefe-shoot 0 1 4`:
    the selected clip updates in place. The selection and the playhead are not lost, and the viewer is not reset to 0.
-4. **Move / split / rm from the CLI.** Each one shows up live and in order. Undo in the UI after a Claude
+4. **Move / split / rm from the CLI.** Each one shows up live and in order. Undo in the UI after an agent
    edit does something defined and visible: it either undoes the operator's own last edit only, or says what it will undo.
    Record which behaviour you saw.
 5. **Simultaneous edits.** Start dragging a clip edge in the UI and, while still dragging, run a CLI
    `timeline add`. When you release, neither edit is silently lost: the final `./studio timeline show` has
    both. If one is lost, record that as a finding.
-6. **Claude renders.** `CLAUDECODE=1 ./studio render jefe-shoot`. The export appears in `#exports` with
-   no reload, attributed to Claude.
+6. **The agent renders.** `STUDIO_ACTOR=agent ./studio render jefe-shoot`. The export appears in `#exports` with
+   no reload, attributed to the agent.
 7. **Notes loop.** Send a note from the UI. `./studio notes -p jefe-shoot` shows it with the focus the UI
    attached.
 8. **Burst.** `for i in $(seq 20); do ./studio timeline add jefe-shoot <id> 0 1; done`. The UI keeps up

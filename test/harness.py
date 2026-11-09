@@ -48,17 +48,24 @@ def fixtures():
     return path
 
 
-def env_for(home, actor_claude=False, **extra):
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+# What says "an agent is driving this" (studio.py's AGENT_MARKERS, STUDIO_ACTOR) and which
+# agent the AI steps call: none of it leaks in from the shell the tests run in.
+AGENT_ENV = ("CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX", "GOOSE_TERMINAL", "STUDIO_ACTOR",
+             "STUDIO_AGENT", "STUDIO_AGENT_CMD", "STUDIO_AGENT_MODEL", "STUDIO_MOMENTS_MODEL",
+             "STUDIO_CLAUDE_MODEL")
+
+
+def env_for(home, as_agent=False, **extra):
+    env = {k: v for k, v in os.environ.items() if k not in AGENT_ENV}
     env["STUDIO_HOME"] = str(home)
-    if actor_claude:
-        env["CLAUDECODE"] = "1"
+    if as_agent:
+        env["STUDIO_ACTOR"] = "agent"
     env.update(extra)
     return env
 
 
-def cli(home, *args, check=True, actor_claude=False, input=None, timeout=600):
-    r = subprocess.run([sys.executable, str(STUDIO_PY), *map(str, args)], env=env_for(home, actor_claude),
+def cli(home, *args, check=True, as_agent=False, input=None, timeout=600, env=None):
+    r = subprocess.run([sys.executable, str(STUDIO_PY), *map(str, args)], env=env or env_for(home, as_agent),
                        capture_output=True, text=True, input=input, timeout=timeout)
     if check and r.returncode != 0:
         raise AssertionError(f"studio {' '.join(map(str, args))} failed ({r.returncode}):\n"
@@ -83,7 +90,7 @@ def import_studio(home):
 
 
 def fake_moments(home, mid, duration, n=3, title="Moment"):
-    """Write a hand-made moments.json and emit step.moments (no claude -p)."""
+    """Write a hand-made moments.json and emit step.moments (no agent call)."""
     S = import_studio(home)
     span = duration / n
     ms = [{"n": i + 1, "start": round(i * span + 0.5, 2), "end": round((i + 1) * span - 0.5, 2),

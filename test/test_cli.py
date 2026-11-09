@@ -4,10 +4,11 @@
     (or test/run_all.sh)
 
 One shared temp STUDIO_HOME gets all fixtures ingested once (that runs the real proxy /
-whisper / keyframes steps); each test then works in its own project. AI steps are never
-called: moments.json is written by hand and step.moments emitted through the studio module.
+whisper / keyframes steps); each test then works in its own project. The CLI tests never
+call an agent: moments.json is written by hand and step.moments emitted through the studio
+module. The Agents tests run moments/draft through fake agents (test/fakeagents).
 """
-import json, os, shutil, sys, time, unittest
+import json, os, shutil, sys, tempfile, time, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -241,8 +242,18 @@ class CLI(unittest.TestCase):
         H.cli(self.home, "timeline", "add", slug, self.mid("site-walk.mov"), "0", "3")
         self.assertEqual(self.last_saved(slug)["data"].get("actor"), "cli")
         H.cli(self.home, "timeline", "add", slug, self.mid("site-walk.mov"), "3", "6",
-              actor_claude=True)
-        self.assertEqual(self.last_saved(slug)["data"].get("actor"), "claude")
+              as_agent=True)
+        self.assertEqual(self.last_saved(slug)["data"].get("actor"), "agent")
+
+    def test_agent_is_recognised_by_its_shell(self):
+        """Each agent's shell marker makes the CLI's edits the agent's; STUDIO_ACTOR overrides."""
+        slug = self.project("Markers")
+        sw = self.mid("site-walk.mov")
+        for marker, expect in [({"CLAUDECODE": "1"}, "agent"), ({"CODEX_THREAD_ID": "t-1"}, "agent"),
+                               ({"GOOSE_TERMINAL": "1"}, "agent"), ({"STUDIO_ACTOR": "agent"}, "agent"),
+                               ({"CLAUDECODE": "1", "STUDIO_ACTOR": "cli"}, "cli"), ({}, "cli")]:
+            H.cli(self.home, "timeline", "add", slug, sw, "0", "2", env=H.env_for(self.home, **marker))
+            self.assertEqual(self.last_saved(slug)["data"].get("actor"), expect, marker)
 
     def test_timeline_normalize_clamps(self):
         slug = self.project("Clamp")
@@ -428,7 +439,7 @@ class CLI(unittest.TestCase):
         self.assertIn("my own x", posts)
         self.assertIn("operator rewrote: x", posts)
         self.assertIn("my own x", json.dumps(json.loads(H.cli(self.home, "posts", pt, "--json").stdout)))
-        # a bare AI step must not run claude -p over the whole library
+        # a bare AI step must not call the agent for the whole library
         for step in ("moments", "draft", "cut"):
             r = H.cli(self.home, step, check=False)
             self.assertNotEqual(r.returncode, 0)
@@ -448,13 +459,17 @@ class CLI(unittest.TestCase):
         self.assertIn("(no unread notes)", H.cli(home, "notes", "--unread").stdout)
         self.assertEqual(json.loads(H.cli(home, "notes", "--json").stdout)[0]["focus"]["selection"]["id"],
                          "1165db27")
-        # reading as Claude marks it seen; say --re replies in the thread
-        H.cli(home, "notes", actor_claude=True)
-        H.cli(home, "say", "on it", "--re", "n1", actor_claude=True)
+        # reading as the agent marks it seen; say --re replies in the thread
+        H.cli(home, "notes", as_agent=True)
+        H.cli(home, "say", "on it", "--re", "n1", as_agent=True)
         S.HOME = home
         notes = S.state()["notes"]
         self.assertTrue(notes[0].get("acked"))
-        self.assertEqual((notes[1]["actor"], notes[1]["re"], notes[1]["project"]), ("claude", "n1", "p"))
+        self.assertEqual((notes[1]["actor"], notes[1]["re"], notes[1]["project"]), ("agent", "n1", "p"))
+        self.assertIn("agent: on it", H.cli(home, "notes").stdout)
+        # a library from before says "claude" for the agent: still the agent
+        S.emit("note", None, text="older reply", project="p", actor="claude", id="n0")
+        self.assertIn("agent: older reply", H.cli(home, "notes").stdout)
         self.S.HOME = self.home
 
 
@@ -502,9 +517,9 @@ class CLI(unittest.TestCase):
         slug = self.project("Never Saved")
         self.assertEqual(self.st()["projects"][slug]["rev"], 0)
         self.assertEqual(json.loads(H.cli(self.home, "timeline", "show", "--json", slug).stdout)["rev"], 0)
-        H.cli(self.home, "timeline", "add", slug, self.mid("site-walk.mov"), "0", "2", actor_claude=True)
+        H.cli(self.home, "timeline", "add", slug, self.mid("site-walk.mov"), "0", "2", as_agent=True)
         r = H.cli(self.home, "timeline", "clear", slug, "--base", "0", check=False)
-        self.assertEqual(r.returncode, 3, "an edit based on rev 0 must not overwrite Claude's save")
+        self.assertEqual(r.returncode, 3, "an edit based on rev 0 must not overwrite the agent's save")
         self.assertEqual(len(self.tl(slug)["clips"]), 1)
 
     def test_event_log_survives_a_torn_line(self):
@@ -659,7 +674,7 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
                                [{"w": "Air", "start": 0, "end": .3}, {"w": "raid", "start": .3, "end": .6},
                                 {"w": "the", "start": .6, "end": .8}, {"w": "lawn,", "start": .8, "end": 1.1},
                                 {"w": "Hefe.", "start": 1.2, "end": 1.6}])
-        r = H.cli(home, "words", "abc000000001", "--fix", "Hefe", "Jefe", actor_claude=True)
+        r = H.cli(home, "words", "abc000000001", "--fix", "Hefe", "Jefe", as_agent=True)
         self.assertIn("1 × 'Hefe' → 'Jefe'", r.stdout)
         t1 = json.loads((home / "media" / "abc000000001" / "transcript.json").read_text())
         self.assertEqual(t1["words"][-1]["w"], "Jefe.")
@@ -669,7 +684,7 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
         self.assertEqual(t2["words"][-1]["w"], "Hefe.", "without --all only that file changes")
         ev = [e for e in H.events(home) if e["type"] == "transcript.edited"]
         self.assertEqual((ev[-1]["media"], ev[-1]["data"]["actor"], ev[-1]["data"]["count"]),
-                         ("abc000000001", "claude", 1))
+                         ("abc000000001", "agent", 1))
         S.HOME = home
         self.assertEqual(S.state()["media"]["abc000000001"]["steps"]["transcribe"]["sha256"],
                          ev[-1]["data"]["sha256"], "the receipt must change so clients refetch")
@@ -1030,6 +1045,102 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
         self.assertIn("still zipped", r.stderr)
         r = H.cli(home, "import", home, check=False)
         self.assertIn("isn't a studio bundle", r.stderr)
+
+
+@unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")
+class Agents(unittest.TestCase):
+    """moments and draft through each built-in agent and a custom command. The agents are
+    fakes (test/fakebin, test/fakeagents) that speak the real CLIs' surface: they check their
+    arguments, log each call to $FAKE_AGENT_LOG and answer with canned JSON."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.home = H.new_home("agents")
+        H.cli(cls.home, "ingest", "-p", "shoot", H.fixtures() / "phone-talking.mov")
+        cls.S = H.import_studio(cls.home)
+        cls.mid = next(iter(cls.S.state()["media"]))
+
+    def setUp(self):
+        self.S.HOME = self.home
+
+    def run_agent(self, step, **env):
+        log = Path(tempfile.mkstemp(prefix="agent-log-", dir=self.home)[1])
+        path = f"{H.TEST_DIR / 'fakeagents'}:{H.TEST_DIR / 'fakebin'}:{os.environ['PATH']}"
+        e = H.env_for(self.home, PATH=path, FAKE_AGENT_LOG=str(log), FAKE_AGENT_DELAY="0", **env)
+        n = len(H.events(self.home))
+        H.cli(self.home, step, self.mid, "--force", env=e)
+        evs = [x for x in H.events(self.home)[n:] if x["type"] in (f"step.{step}", "step.failed")]
+        calls = [json.loads(l) for l in log.read_text().splitlines()]
+        return evs[-1], calls
+
+    def test_each_agent_finds_moments_and_drafts(self):
+        media = str((self.home / "media" / self.mid).resolve())
+        for agent, env in [("claude", {"STUDIO_AGENT": "claude"}), ("codex", {"STUDIO_AGENT": "codex"}),
+                           ("goose", {"STUDIO_AGENT": "goose"}),
+                           ("fake-agent", {"STUDIO_AGENT_CMD": "fake-agent --flag"})]:
+            with self.subTest(agent=agent):
+                ev, calls = self.run_agent("moments", **env)
+                self.assertEqual((ev["type"], ev["data"].get("moments")), ("step.moments", 2), ev)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(Path(calls[0]["argv"][0]).name, agent)
+                self.assertEqual(str(Path(calls[0]["cwd"]).resolve()), media, "runs in the media folder")
+                self.assertIn("content strategist", calls[0]["prompt"], "the prompt goes on stdin")
+                ev, calls = self.run_agent("draft", **env)
+                self.assertEqual((ev["type"], ev["data"].get("posts")), ("step.draft", 2), ev)
+                posts = json.loads(H.cli(self.home, "posts", self.mid, "--json").stdout)
+                self.assertEqual(len(posts["posts"]), 2)
+
+    def test_command_lines_and_models(self):
+        # claude: moments on Opus unless told otherwise; drafts on the agent's default
+        _, calls = self.run_agent("moments", STUDIO_AGENT="claude")
+        self.assertEqual(calls[0]["argv"][1:], ["-p", "--output-format", "json", "--model",
+                                                "claude-opus-5-5", "--allowedTools", "Read"])
+        _, calls = self.run_agent("draft", STUDIO_AGENT="claude", STUDIO_CLAUDE_MODEL="old-name")
+        self.assertEqual(calls[-1]["argv"][1:], ["-p", "--output-format", "json", "--model", "old-name",
+                                                "--allowedTools", "Read"])
+        # codex: exec, read-only, prompt on stdin ("-"), last message to a file
+        _, calls = self.run_agent("moments", STUDIO_AGENT="codex")
+        a = calls[0]["argv"][1:]
+        self.assertEqual(a[:7], ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral",
+                                 "--color", "never"])
+        self.assertEqual((a[-3], a[-1]), ("-o", "-"))
+        self.assertNotIn("-m", a, "no claude model id for codex")
+        _, calls = self.run_agent("moments", STUDIO_AGENT="codex", STUDIO_MOMENTS_MODEL="gpt-x")
+        self.assertEqual(calls[0]["argv"][8:10], ["-m", "gpt-x"])
+        # goose
+        _, calls = self.run_agent("draft", STUDIO_AGENT="goose", STUDIO_AGENT_MODEL="g-1")
+        self.assertEqual(calls[0]["argv"][1:], ["run", "--no-session", "--quiet", "--output-format", "json",
+                                                "--model", "g-1", "-i", "-"])
+        # a custom command gets the model in its environment; it wins over STUDIO_AGENT
+        _, calls = self.run_agent("draft", STUDIO_AGENT="codex", STUDIO_AGENT_CMD="fake-agent",
+                                  STUDIO_AGENT_MODEL="m-2")
+        self.assertEqual((Path(calls[0]["argv"][0]).name, calls[0]["model_env"]), ("fake-agent", "m-2"))
+        # STUDIO_MOMENTS_MODEL="" = no override: the agent's own default
+        _, calls = self.run_agent("moments", STUDIO_AGENT="claude", STUDIO_MOMENTS_MODEL="")
+        self.assertNotIn("--model", calls[0]["argv"])
+
+    def test_agent_failures_are_step_failures(self):
+        ev, _ = self.run_agent("moments", STUDIO_AGENT="codex", FAKE_AGENT_FAIL="1")
+        self.assertEqual(ev["type"], "step.failed")
+        self.assertIn("not logged in", ev["data"]["error"])
+        ev, _ = self.run_agent("moments", STUDIO_AGENT="aider")
+        self.assertIn("STUDIO_AGENT_CMD", ev["data"]["error"])
+        ev, _ = self.run_agent("moments", STUDIO_AGENT_CMD="no-such-agent-cli")
+        self.assertIn("not on PATH", ev["data"]["error"])
+        ev, _ = self.run_agent("draft", STUDIO_AGENT_CMD="true")
+        self.assertIn("no reply", ev["data"]["error"])
+
+    def test_studio_agent_says_which_and_how(self):
+        e = H.env_for(self.home, STUDIO_AGENT="goose", STUDIO_AGENT_MODEL="g-1")
+        out = H.cli(self.home, "agent", env=e).stdout
+        self.assertIn("agent    goose", out)
+        self.assertIn("goose run --no-session --quiet --output-format json --model g-1 -i -", out)
+        self.assertIn("you are  cli", out)
+        out = H.cli(self.home, "agent", env={**e, "CODEX_THREAD_ID": "t"}).stdout
+        self.assertIn("you are  agent", out)
+        r = H.cli(self.home, "agent", check=False, env=H.env_for(self.home, STUDIO_AGENT="aider"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("STUDIO_AGENT_CMD", r.stderr)
 
 
 if __name__ == "__main__":

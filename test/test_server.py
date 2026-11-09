@@ -195,7 +195,7 @@ class Server(unittest.TestCase):
         self.assertEqual(st, 200, data[:300])
         rev = int(hdrs["x-timeline-rev"])
         self.assertEqual(self.st()["projects"][slug]["rev"], rev)
-        H.cli(self.home, "timeline", "add", slug, sr, actor_claude=True)   # Claude edits
+        H.cli(self.home, "timeline", "add", slug, sr, as_agent=True)   # the agent edits
         st, _, data = self.srv.request("PUT", f"/api/projects/{slug}/timeline?base={rev}",
                                        {"aspect": "9:16", "captions": True, "clips": []})
         self.assertEqual(st, 409)
@@ -260,12 +260,12 @@ class Server(unittest.TestCase):
             for i in range(3):
                 n0 = len(sse.events)
                 H.cli(self.home, "timeline", "add", slug, self.mid("screen-recording.mp4"),
-                      i, i + 2, actor_claude=True)
+                      i, i + 2, as_agent=True)
                 t_exit = time.time()
                 t, ev = sse.wait_for(lambda e: e["type"] == "timeline.saved"
                                      and e["data"]["project"] == slug, since=n0, timeout=3)
                 self.assertIsNotNone(ev, "no SSE event for the CLI edit within 3s")
-                self.assertEqual(ev["data"].get("actor"), "claude")
+                self.assertEqual(ev["data"].get("actor"), "agent")
                 self.assertEqual(len(ev["data"]["timeline"]["clips"]), i + 1)
                 lat.append(t - t_exit)
             self.assertLess(max(lat), 1.0, f"SSE latency after CLI exit: {lat}")
@@ -477,12 +477,12 @@ class Server(unittest.TestCase):
 
     def test_first_save_of_new_project_cannot_clobber(self):
         """S3: a new project has rev 0; a PUT based on rev 0 (or with no base at all) after
-        Claude saved is refused with 409 and the current story, instead of discarding Claude's
+        the agent saved is refused with 409 and the current story, instead of discarding the agent's
         edit."""
         slug = self.new_project("Fresh Race")
         self.assertEqual(self.st()["projects"][slug]["rev"], 0)
         sr = self.mid("screen-recording.mp4")
-        H.cli(self.home, "timeline", "add", slug, sr, "0", "4", actor_claude=True)
+        H.cli(self.home, "timeline", "add", slug, sr, "0", "4", as_agent=True)
         mine = {"aspect": "9:16", "captions": True, "clips": [{"id": "op1", "media": sr, "in": 5, "out": 9}]}
         for q in ("?base=0", ""):
             st, _, data = self.srv.request("PUT", f"/api/projects/{slug}/timeline{q}", mine)
@@ -490,7 +490,7 @@ class Server(unittest.TestCase):
             self.assertEqual(json.loads(data)["rev"], 1)
         clips = self.st()["projects"][slug]["timeline"]["clips"]
         self.assertEqual(len(clips), 1)
-        self.assertNotEqual(clips[0]["id"], "op1", "Claude's clip was overwritten")
+        self.assertNotEqual(clips[0]["id"], "op1", "the agent's clip was overwritten")
 
     def test_fix_word_endpoint(self):
         """Q1d: POST /api/words/ID/fix fixes one word (index) or every one (all), emits
@@ -527,6 +527,9 @@ class DesktopApp(unittest.TestCase):
             self.assertEqual((h["app"], h["port"], h["owner"]), ("studio", srv.port, True))
             self.assertEqual(Path(h["home"]), home.resolve())
             self.assertIn("exists", h["model"])
+            # which agent "Find moments" will call, and whether it's on PATH
+            self.assertIn(h["agent"]["name"], ("claude", "codex", "goose"))
+            self.assertIn("agent", h["tools"])
             lock = json.loads((home / ".server.json").read_text())
             self.assertEqual((lock["pid"], lock["port"]), (h["pid"], srv.port))
             with H.Server(home) as second:      # a second server on the same library

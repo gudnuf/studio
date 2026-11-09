@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+# Fake agent for STUDIO_AGENT_CMD (the UI tests use it): prompt on stdin, reply on stdout.
+import os, sys, time
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "fakeagents"))
+import canned
+p = sys.stdin.read()
+canned.record(sys.argv, p)
+time.sleep(float(os.environ.get("FAKE_AGENT_DELAY", "2")))
+print(canned.reply(p))

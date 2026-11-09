@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Seed a throwaway STUDIO_HOME for UI work: fixtures ingested (real proxy/whisper/keyframes),
-hand-written moments + drafts (no claude -p), and a "jefe-shoot" project with a 4-clip story.
+hand-written moments + drafts (no agent call), and a "jefe-shoot" project with a 4-clip story.
 
     nix develop -c python3 test/seed.py /path/to/home [--fixtures DIR] [--bare]
 
