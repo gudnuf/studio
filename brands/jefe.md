@@ -7,7 +7,7 @@ intellectual-signature interview produces a real brand document.
 Jefe: "Say it out loud. Get the paperwork." You walk a job and talk it through,
 the way you'd tell a helper, and Jefe has the estimate written before you're back
 in the truck. iPhone only. Your first five walks are free with no card, then it's
-$39/mo or $299.99/yr.
+$39.99/mo or $299.99/yr.
 
 ## Who it's for
 Landscapers, property managers and home inspectors. People who work in the field
@@ -20,6 +20,8 @@ and hate typing up paperwork at night.
   didn't hear instead of guessing, so you never send a number you didn't choose.
 - **Three steps:** walk and talk, fix anything, send it. Output can be an estimate,
   invoice, work order or report, with your letterhead.
+- **First 5 walks free, no card.** (Verified offer, 2026-11-09.)
+- **On the App Store as "Jefe: Voice Estimate Maker"**, $39.99/mo or $299.99/yr.
 - **No account and no sign-up.** You can be walking a job in under a minute.
 - **Built by a one-person shop in California.** "If you email, you get me."
 
