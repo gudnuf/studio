@@ -4,7 +4,7 @@ import json, re
 
 
 def reply(p):
-    if "Find 3-8 MOMENTS" in p:
+    if "MOMENTS worth cutting" in p:
         m = re.search(r'FOOTAGE: ".*?" — .*?, (\d+):(\d+\.\d)', p)
         d = int(m.group(1)) * 60 + float(m.group(2)) if m else 30
         out = [{"start": 1.0, "end": round(d * .4, 1), "title": "Two hours every night", "hook": "I used to spend two hours every night", "pillar": "time back", "why": "Concrete pain.", "angle": "past-self", "kind": "talking"},

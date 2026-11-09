@@ -430,6 +430,10 @@ def brand_text(item):
     p = HERE / "brands" / f"{name}.md"
     return p.read_text() if p.exists() else f"(no brand file for {name})"
 
+def quality_text():
+    p = HERE / "QUALITY.md"
+    return p.read_text().strip() if p.exists() else "(no QUALITY.md)"
+
 def brand_words(name):
     """(vocabulary, fixes) from brands/<name>.md. `## Vocabulary`: terms, comma-separated
     or one per line. `## Fix words`: one `- heard → meant` per line (-> also works).
@@ -1592,6 +1596,9 @@ be honest about it, not to polish it.
 BRAND:
 {brand}
 
+THE BAR (QUALITY.md): every reel made from your moments must clear it. Aim at it:
+{quality}
+
 FOOTAGE: "{name}" — {kind}, {dur} long, {orient}.
 
 TRANSCRIPT (timestamped segments; may be empty for silent screen recordings):
@@ -1600,11 +1607,14 @@ TRANSCRIPT (timestamped segments; may be empty for silent screen recordings):
 KEYFRAMES: one every {every}s, listed in {kf_index}. Open a handful of the images to
 see what is on screen — more if the footage is silent.
 
-Find 3-8 MOMENTS worth cutting into short vertical clips (15-75s each; shorter is fine if the
-footage itself is short). Prefer: a concrete claim shown on screen, a real job-site detail, a
-moment of friction or surprise, a line that sounds like a person and not a pitch. Each moment
-must start and end on clean sentence boundaries from the transcript (or on a visual change if
-silent). Never invent facts beyond the brand file and the footage.
+Find the MOMENTS worth cutting into short vertical clips: fewer and stronger, usually 1-3,
+never more than 6. If nothing here clears the bar, return [] (an empty list is a good answer).
+Each moment is a complete thought: it makes sense said alone, with one takeaway, and it starts
+at the start of a sentence and ends after its last word (or on a visual change if silent).
+15-35s each (shorter is fine if the footage itself is short). Prefer: a concrete claim shown on
+screen, a real job-site detail, a moment of friction or surprise, a line that sounds like a
+person and not a pitch. Never a fragment picked for the picture. Never invent facts beyond the
+brand file and the footage.
 
 Return ONLY a JSON array, no prose:
 [{{"start": seconds, "end": seconds, "title": "short working title",
@@ -1622,7 +1632,8 @@ def moments(item):
         if item["has_video"] else "audio only"
     kind = "screen/phone video" if item["has_video"] else "audio"
     prompt = MOMENTS_PROMPT.format(
-        brand=brand_text(item), name=item["name"], kind=kind, dur=fmt_t(item["duration"]),
+        brand=brand_text(item), quality=quality_text(), name=item["name"], kind=kind,
+        dur=fmt_t(item["duration"]),
         orient=orient, transcript=transcript, every=kf.get("every", "?"),
         kf_index="keyframes/index.json" if kf.get("frames") else "(no keyframes)")
     ms = parse_json_block(agent(prompt, cwd=d, allow_read=True, model=moments_model(agent_name())))
