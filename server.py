@@ -100,6 +100,13 @@ def state_body():
             if it.get("path"):    # play the original until the proxy exists (Chrome does HEVC)
                 it["source"] = f"media/{mid}/{Path(it['path']).name}"
             it.pop("path", None)
+        for pj in st["projects"].values():     # "ready" only for the bytes actually on disk
+            for ex in pj.get("exports") or []:
+                if ex.get("verdict", {}).get("state") == "ready":
+                    ex["verdict"] = S.export_verdict(pj, ex, S.bytes_sha(S.HOME / ex["file"]) or "missing")
+            if pj.get("exports"):
+                pj["ready"] = pj["exports"][-1]["verdict"]["state"] == "ready"
+            pj.pop("checks", None)
         st["jobs"] = {k: v for k, v in st["jobs"].items() if v["status"] == "running"}
         st["queued"] = queued
         st["queued_jobs"] = qjobs
@@ -366,6 +373,28 @@ class H(BaseHTTPRequestHandler):
                                                                       .relative_to(S.HOME))},
                              lane="export", project=slug)
                 return self.send_json({"job": job})
+            if (m := re.match(r"^/api/projects/([^/]+)/check$", path)):
+                # measure the latest export against the bar: what makes it "ready"
+                slug = m.group(1)
+                job = submit("check", lambda _started: {k: v for k, v in S.check(slug, actor="operator").items()
+                                                        if k in ("file", "ok", "failed", "excepted", "sha256")},
+                             lane="export", project=slug)
+                return self.send_json({"job": job})
+            if path == "/api/exceptions/revoke":
+                # the operator takes back an exception (the agent's, usually): tuning data
+                b = self.body_json()
+                x = S.revoke_exception(str(b["project"]), str(b["id"]), str(b.get("why") or ""),
+                                       actor="operator")
+                return self.send_json({"ok": True, "id": x["id"]})
+            if path == "/api/choice":
+                # a pick in the UI (a moment into the story, a post kept or rewritten)
+                b = self.body_json()
+                return self.send_json(S.record_choice(
+                    str(b["project"]), [str(x) for x in b.get("shown") or []],
+                    None if b.get("chosen") is None else str(b["chosen"]), kind=b.get("kind"),
+                    action=b.get("action") or "pick", blind=bool(b.get("blind")),
+                    note=b.get("note"), text=b.get("text"), actor="operator",
+                    options=b.get("options") if isinstance(b.get("options"), dict) else None))
             if path == "/api/notes":
                 b = self.body_json()
                 ev = S.emit("note", None, text=b["text"].strip(), project=b.get("project"),

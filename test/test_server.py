@@ -382,6 +382,39 @@ class Server(unittest.TestCase):
         self.assertTrue(any(e["type"] == "render.done" and e["data"].get("actor") == "operator"
                             for e in H.events(self.home)))
 
+    def test_ready_choice_and_revoke_endpoints(self):
+        slug = self.new_project("Ready")
+        pt = self.mid("phone-talking.mov")
+        self.srv.json("PUT", f"/api/projects/{slug}/timeline",
+                      {"aspect": "9:16", "captions": True, "clips": [{"media": pt, "in": 1, "out": 4}]})
+        ev = wait_job(self.home, self.srv.json("POST", f"/api/projects/{slug}/render")["job"], 600)
+        self.assertEqual(ev["type"], "job.done", ev["data"].get("error"))
+        pj = self.st()["projects"][slug]
+        self.assertEqual(pj["exports"][-1]["verdict"]["state"], "unchecked", "exported is not ready")
+        self.assertFalse(pj["ready"])
+        self.assertNotIn("checks", pj)
+        H.cli(self.home, "exception", "grant", slug, "length", "--why", "a 3s test clip, short on purpose",
+              as_agent=True)
+        ev = wait_job(self.home, self.srv.json("POST", f"/api/projects/{slug}/check")["job"], 600)
+        self.assertEqual(ev["type"], "job.done", ev["data"].get("error"))
+        chk = [e for e in H.events(self.home) if e["type"] == "check.done"][-1]["data"]
+        self.assertEqual(chk["actor"], "operator")
+        v = self.st()["projects"][slug]["exports"][-1]["verdict"]
+        self.assertEqual(v["state"], "ready" if chk["ok"] else "failed", v)
+        if chk["ok"]:
+            x = v["excepted"][0]["exception"]
+            self.srv.json("POST", "/api/exceptions/revoke", {"project": slug, "id": x, "why": "too short"})
+            rv = [e for e in H.events(self.home) if e["type"] == "exception.revoked"][-1]["data"]
+            self.assertEqual((rv["actor"], rv["why"], rv["granted_by"]), ("operator", "too short", "agent"))
+            self.assertEqual(self.st()["projects"][slug]["exports"][-1]["verdict"]["state"], "failed")
+        # a pick in the UI: a moment into the story
+        ms = [{"n": 1, "start": 0.5, "end": 3.0, "title": "a"}, {"n": 2, "start": 3.0, "end": 6.0, "title": "b"}]
+        (self.home / "media" / pt / "moments.json").write_text(json.dumps(ms))
+        d = self.srv.json("POST", "/api/choice", {"project": slug, "kind": "moment", "action": "pick",
+                                                  "shown": [f"{pt}@1", f"{pt}@2"], "chosen": f"{pt}@2"})
+        self.assertEqual((d["chosen"], d["position"], d["actor"], d["brand"]), (f"{pt}@2", 1, "operator", "jefe"))
+        self.assertTrue(any(e["type"] == "choice" for e in H.events(self.home)))
+
     def test_render_empty_fails_cleanly(self):
         slug = self.new_project("Empty Render")
         job = self.srv.json("POST", f"/api/projects/{slug}/render")["job"]
