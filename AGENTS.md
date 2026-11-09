@@ -88,6 +88,7 @@ without replying. `studio log -n 20` shows the latest events from both of you.
 5. Only then tell the operator it's done, with what check measured and your answers. "Ready" is
    not yours to say: `studio ready P` says it, for the bytes that were checked. Re-render and
    it's unchecked again.
+   Multi-party approval comes later with automation (likely shared via nostr); not built.
 
 ### Exceptions: when the rule is wrong for this reel
 
