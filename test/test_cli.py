@@ -1320,6 +1320,142 @@ class Quality(unittest.TestCase):
         self.assertEqual(r["cuts"]["status"], "pass", "no speech: nothing to cut into")
 
 
+    # ---- speechless clips are picture; declared on-screen text; cards ----
+    def test_a_clip_with_no_speech_is_picture_not_a_pause(self):
+        # spoken, then 7s of b-roll nobody talks in (a cartoon, a walk), then spoken: before,
+        # check called the b-roll a 7-8s "pause"
+        regs = self.known["speech"]
+        slug = self.project("Speechless")
+        H.cli(self.home, "timeline", "add", slug, self.b, regs[0][0] - 0.3, regs[0][1] + 0.3, "--snap")
+        H.cli(self.home, "timeline", "add", slug, self.r, 0.5, 7.5)
+        H.cli(self.home, "timeline", "add", slug, self.b, regs[1][0] - 0.3, regs[1][1] + 0.3, "--snap")
+        H.cli(self.home, "render", slug, timeout=900)
+        res, r = self.check(slug)
+        self.assertEqual(r["pauses"]["status"], "pass", r["pauses"])
+        self.assertLess(float(r["pauses"]["detail"].split("longest pause ")[1].split("s")[0]), 0.36)
+        self.assertEqual(r["cuts"]["status"], "pass", r["cuts"])
+        self.assertEqual(r["first word"]["status"], "pass", r["first word"])
+
+    def test_exceptions_on_screen_text_cards_and_ready(self):
+        regs = self.known["speech"]
+        slug = self.project("Cold open")
+        # a 1.5s silent cold open, then two sentences with 0.9s of room tone (and 0.36s of black
+        # picture) between them, labelled the way the old magic-word path wanted
+        H.cli(self.home, "timeline", "add", slug, self.r, 0.5, 2.0)
+        H.cli(self.home, "timeline", "add", slug, self.b, regs[1][0] - 0.3, regs[2][1] + 0.3, "--snap")
+        H.cli(self.home, "timeline", "label", slug, "2", "payoff hold reveal still")
+        c1, c2 = [c["id"] for c in self.clips(slug)]
+        H.cli(self.home, "render", slug, timeout=900)
+        self.assertEqual(H.cli(self.home, "ready", slug, check=False).returncode, 1, "not checked: not ready")
+        res, r = self.check(slug)
+        self.assertEqual(r["first word"]["status"], "fail", r["first word"])
+        self.assertEqual(r["pauses"]["status"], "fail", "a label is not an exception any more")
+        self.assertEqual(r["picture"]["status"], "fail", r["picture"])
+        ev = [e for e in H.events(self.home) if e["type"] == "check.done"][-1]["data"]
+        exp = self.S.state()["projects"][slug]["exports"][-1]
+        self.assertEqual(ev["sha256"], self.S.receipt(self.home / exp["file"]), "bound to the bytes")
+        self.assertEqual(ev["brand"], "jefe")
+        self.assertIn({"rule": "pauses", "clip": c2}, [{k: f[k] for k in ("rule", "clip")} for f in ev["failures"]])
+        r_ = H.cli(self.home, "ready", slug, check=False)
+        self.assertEqual(r_.returncode, 1)
+        self.assertIn("not ready", r_.stdout)
+
+        # what an exception may and may not be
+        bad = H.cli(self.home, "exception", "grant", slug, "loudness", "--why", "it sounds fine to me", check=False)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("can't be excepted", bad.stderr)
+        self.assertNotEqual(H.cli(self.home, "exception", "grant", slug, "pauses", c2, check=False).returncode, 0,
+                            "an exception needs a reason in words")
+        # the agent grants its own, with reasons; the picture is declared, not guessed
+        why = "the beat after 'hours' is a reveal; the picture carries the held silence"
+        H.cli(self.home, "exception", "grant", slug, "pauses", c2, "--why", why, as_agent=True)
+        H.cli(self.home, "exception", "grant", slug, "length", "--why", "a test reel: short on purpose", as_agent=True)
+        H.cli(self.home, "timeline", "onscreen", slug, c1, "3 hours of sprinklers")
+        H.cli(self.home, "timeline", "card", slug, c2, "on")
+        g = [e["data"] for e in H.events(self.home) if e["type"] == "exception.granted"]
+        self.assertEqual([(x["rule"], x["clip"], x["actor"], x["brand"]) for x in g],
+                         [("pauses", c2, "agent", "jefe"), ("length", None, "agent", "jefe")])
+        H.cli(self.home, "render", slug, timeout=900)
+        self.assertEqual(H.cli(self.home, "ready", slug, check=False).returncode, 1, "a re-render starts unchecked")
+        r2 = H.cli(self.home, "check", slug, timeout=900)          # exit 0: every failure excepted
+        self.assertIn("EXCEPTION", r2.stdout)
+        self.assertIn(why, r2.stdout)
+        res, r = self.check(slug)
+        self.assertTrue(res["ok"], res["failed"])
+        self.assertEqual(r["first word"]["status"], "pass", r["first word"])
+        self.assertIn("on-screen text at 0.00s", r["first word"]["detail"])
+        self.assertEqual(r["picture"]["status"], "pass", "a designed card is not black")
+        self.assertEqual(r["pauses"]["status"], "excepted")
+        self.assertEqual(r["pauses"]["excepted"][0]["why"], why)
+        self.assertEqual({x["rule"] for x in res["excepted"]}, {"pauses", "length"})
+        self.assertIn("EXCEPTION", (self.home / res["sheet"] / "verdict.txt").read_text(), "on the review sheet")
+        rd = H.cli(self.home, "ready", slug)
+        self.assertIn("ready:", rd.stdout)
+        self.assertIn("EXCEPTION", rd.stdout)
+        self.assertTrue(self.S.state()["projects"][slug]["ready"])
+
+        # the operator revokes one: not ready again, and the revocation says what it took back
+        xid = [x for x in g if x["rule"] == "pauses"][0]["id"]
+        H.cli(self.home, "exception", "revoke", slug, xid, "--why", "that silence drags")
+        rv = [e["data"] for e in H.events(self.home) if e["type"] == "exception.revoked"][-1]
+        self.assertEqual((rv["rule"], rv["clip"], rv["granted_by"], rv["granted_why"], rv["why"]),
+                         ("pauses", c2, "agent", why, "that silence drags"))
+        r_ = H.cli(self.home, "ready", slug, check=False)
+        self.assertEqual(r_.returncode, 1)
+        self.assertIn("fails pauses", r_.stdout)
+        self.assertNotEqual(H.cli(self.home, "exception", "revoke", slug, xid, check=False).returncode, 0)
+        ls = H.cli(self.home, "exception", "ls", slug, "--all").stdout
+        self.assertIn("REVOKED", ls)
+        # bytes changed under the record: not ready either
+        H.cli(self.home, "exception", "grant", slug, "pauses", c2, "--why", "trying it again, held on purpose")
+        self.assertEqual(H.cli(self.home, "ready", slug, check=False).returncode, 0)
+        f = self.home / self.S.state()["projects"][slug]["exports"][-1]["file"]
+        with open(f, "ab") as fh:
+            fh.write(b"\0")
+        r_ = H.cli(self.home, "ready", slug, check=False)
+        self.assertEqual(r_.returncode, 1)
+        self.assertIn("changed since it was rendered", r_.stdout)
+
+    # ---- choice ----
+    def test_choices_are_logged_with_provenance_and_blind_rounds(self):
+        slug = self.render_clip("Versions", 0.5, 3.0)
+        H.cli(self.home, "timeline", "trim", slug, "1", 0.6, 3.6, "--snap")
+        H.cli(self.home, "render", slug, timeout=900)
+        exs = self.S.state()["projects"][slug]["exports"]
+        a, b = exs[0]["sha256"], exs[1]["sha256"]
+        H.cli(self.home, "choose", slug, b[:8], "--from", f"{a[:8]},{b[:8]}", "--note", "tighter ending")
+        ch = [e["data"] for e in H.events(self.home) if e["type"] == "choice"][-1]
+        self.assertEqual((ch["kind"], ch["action"], ch["shown"], ch["chosen"], ch["position"], ch["blind"]),
+                         ("version", "pick", [a, b], b, 1, False))
+        self.assertEqual((ch["project"], ch["brand"], ch["actor"], ch["note"]), (slug, "jefe", "cli", "tighter ending"))
+        self.assertEqual(ch["options"][b]["file"], exs[1]["file"])
+        self.assertEqual(ch["options"][b]["verdict"], "unchecked")
+        self.assertIn("timeline_sha", ch["options"][a])
+        self.assertNotEqual(H.cli(self.home, "choose", slug, "zzzz", "--from", f"{a[:8]},{b[:8]}",
+                                  check=False).returncode, 0, "the chosen one must have been shown")
+        # blind: shuffled copies labelled A/B, the mapping in the log, the pick mapped back
+        out = H.cli(self.home, "ab", slug).stdout
+        rnd = [e["data"] for e in H.events(self.home) if e["type"] == "blind.round"][-1]
+        self.assertEqual(set(rnd["labels"].values()), {a, b})
+        for lab, sha in rnd["labels"].items():
+            self.assertEqual(self.S.receipt(self.home / rnd["dir"] / f"{lab}.mp4"), sha)
+            self.assertNotIn(sha[:8], out, "the labels hide which is which")
+        H.cli(self.home, "choose", slug, "B", "--round", rnd["round"])
+        ch = [e["data"] for e in H.events(self.home) if e["type"] == "choice"][-1]
+        self.assertEqual((ch["blind"], ch["round"], ch["chosen"], ch["position"], ch["labels"]),
+                         (True, rnd["round"], rnd["labels"]["B"], 1, rnd["labels"]))
+        self.assertEqual(ch["shown"], [rnd["labels"]["A"], rnd["labels"]["B"]])
+        H.cli(self.home, "choose", slug, "none", "--round", rnd["round"])
+        self.assertIsNone([e["data"] for e in H.events(self.home) if e["type"] == "choice"][-1]["chosen"])
+        # moments (on bursts: other tests run the real moments step on the b-roll): the provenance of the step that made them
+        prov = {"provider": "claude", "model": "claude-opus-5-5", "task": "moments", "prompt": "abc123"}
+        self.S.emit("step.moments", self.b, moments=2, sha256="f" * 64, provenance=prov)
+        H.cli(self.home, "choose", slug, f"{self.b[:6]}@2", "--from", f"{self.b[:6]}@1,{self.b[:6]}@2")
+        ch = [e["data"] for e in H.events(self.home) if e["type"] == "choice"][-1]
+        self.assertEqual((ch["kind"], ch["chosen"], ch["position"]), ("moment", f"{self.b}@2", 1))
+        self.assertEqual(ch["options"][f"{self.b}@1"]["model"], "claude-opus-5-5")
+        self.assertEqual(ch["options"][f"{self.b}@1"]["step_sha256"], "f" * 64)
+
 
 @unittest.skipUnless(H.have_tools(*NEEDS, "whisper-vad-speech-segments"),
                      "needs ffmpeg/whisper-cli/whisper-vad-speech-segments (run in nix develop)")
@@ -1630,6 +1766,12 @@ class Agents(unittest.TestCase):
             with self.subTest(agent=agent):
                 ev, calls = self.run_agent("moments", **env)
                 self.assertEqual((ev["type"], ev["data"].get("moments")), ("step.moments", 2), ev)
+                prov = ev["data"]["provenance"]     # for the choice log: who made these options
+                self.assertEqual(prov["provider"], "custom" if agent == "fake-agent" else agent)
+                self.assertEqual(prov["prompt"], self.S.prompt_version(self.S.MOMENTS_PROMPT))
+                self.assertEqual((prov["task"], prov["brand"]), ("moments", "jefe"))
+                if agent == "claude":
+                    self.assertEqual(prov["model"], "claude-opus-5-5")
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(Path(calls[0]["argv"][0]).name, agent)
                 self.assertEqual(str(Path(calls[0]["cwd"]).resolve()), media, "runs in the media folder")

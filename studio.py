@@ -22,6 +22,14 @@
   studio render PROJECT                    export the timeline through ffmpeg (loudness -14 LUFS)
   studio check PROJECT [EXPORT] [--json]   measure the export against QUALITY.md, write a review
                                            sheet next to it; exits 1 if a hard rule fails
+  studio ready PROJECT [EXPORT]            is it checked? exit 0 only if a check of these exact
+                                           bytes passes (or every failure has an exception)
+  studio exception grant P RULE [CLIP] --why TEXT | revoke P ID | ls P
+                                           bend a hard rule on purpose, in words; listed by check
+  studio timeline onscreen|card P CLIP ... declare on-screen text (a hook) / a designed card
+  studio choose P CHOSEN|none --from A,B,C | choose P LABEL --round R
+                                           log a pick: what was shown, what was chosen
+  studio ab PROJECT [EXPORT...]            a blind A/B of versions (shuffled, mapping logged)
   studio notes [-p P] [--unread] [--json] [--ack ID..]   notes the operator left, with
                                            what they had selected when they wrote each
   studio say "TEXT" [-p P] [--re NOTE_ID]  reply to the operator (shows in the UI)
@@ -222,9 +230,27 @@ def _apply(acc, ev):
                 del jobs[k]
     elif t == "render.done" and d["project"] in projects:
         projects[d["project"]].setdefault("exports", []).append({**d, "ts": ev["ts"]})
+    elif t == "check.done" and d.get("project") in projects and d.get("sha256"):
+        # a check record binds to the exact bytes it measured (see export_verdict)
+        chk = projects[d["project"]].setdefault("checks", {})
+        chk[d["sha256"]] = {k: d[k] for k in ("sha256", "file", "ok", "failed", "failures", "actor")
+                            if k in d} | {"ts": ev["ts"]}
+    elif t == "exception.granted" and d.get("project") in projects:
+        projects[d["project"]].setdefault("exceptions", {})[d["id"]] = {**d, "ts": ev["ts"]}
+    elif t == "exception.revoked" and d.get("project") in projects:
+        x = projects[d["project"]].get("exceptions", {}).get(d.get("id"))
+        if x and not x.get("revoked"):
+            x["revoked"] = {"ts": ev["ts"], "actor": d.get("actor"), "why": d.get("why")}
+    elif t == "blind.round" and d.get("project") in projects:
+        projects[d["project"]].setdefault("rounds", {})[d["round"]] = {**d, "ts": ev["ts"]}
 
 def _finish(acc):
     st = copy.deepcopy(acc)
+    for pj in st["projects"].values():
+        for ex in pj.get("exports", []):
+            ex["verdict"] = export_verdict(pj, ex)
+        if pj.get("exports"):
+            pj["ready"] = pj["exports"][-1]["verdict"]["state"] == "ready"
     for it in st["media"].values():
         if it["project"] not in st["projects"]:
             st["projects"].setdefault(it["project"], {"slug": it["project"], "name": it["project"],
@@ -284,6 +310,225 @@ def receipt(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+_sha_cache = {}
+
+def bytes_sha(path):
+    """receipt(path), remembered per (path, size, mtime): what's on disk right now, cheaply."""
+    try:
+        s = os.stat(path)
+    except FileNotFoundError:
+        return None
+    key = (str(path), s.st_size, s.st_mtime_ns)
+    if key not in _sha_cache:
+        if len(_sha_cache) > 256:
+            _sha_cache.clear()
+        _sha_cache[key] = receipt(path)
+    return _sha_cache[key]
+
+def project_brand(st, slug):
+    return (st["projects"].get(slug) or {}).get("brand") or "jefe"
+
+
+# ---------- ready means checked; exceptions to the bar ---------------------------------------
+# An export is "ready" only when a check.done exists for its exact bytes (sha256) and every
+# failure it recorded is covered by an exception that is still granted. A re-render is new
+# bytes, so it starts unchecked. Exceptions are events (exception.granted / .revoked): who,
+# which rule, which clip (or the whole reel), and why in words. The agent may grant one when it
+# can justify it; the operator tunes by revoking, and every revocation stays in the log.
+
+# The rules an exception may bend, and the kind of case each is for. The rest (a cut inside a
+# word, loudness, captions against the audio, a filler ending) are defects, never choices.
+EXCEPTABLE = {
+    "pauses": "a held silence the picture carries (a payoff, a reveal)",
+    "shortest": "a short punch that lands (\"Perfect.\" in 0.8s)",
+    "first word": "a silent cold open on action (<= 1.5s, natural sound)",
+    "picture": "a held or dark frame that is meant",
+    "length": "a reel outside 15-35s whose every beat earns it",
+}
+
+def rule_id(name):
+    return re.sub(r"[-_\s]+", " ", str(name or "")).strip().lower()
+
+def covering(f, exceptions):
+    """The granted (not revoked) exception that covers failure f {rule, clip}, or None. One
+    without a clip covers the rule across the whole reel."""
+    return next((x for x in (exceptions or {}).values()
+                 if not x.get("revoked") and f.get("rule") in EXCEPTABLE and x.get("rule") == f["rule"]
+                 and (not x.get("clip") or x["clip"] == f.get("clip"))), None)
+
+def export_verdict(pj, ex, sha=None):
+    """Is this export ready? {state: ready|failed|unchecked, ...}. sha: the bytes on disk now
+    (bytes_sha); default the render's own receipt. Only a check of these very bytes counts."""
+    sha = sha or ex.get("sha256")
+    if sha and ex.get("sha256") and sha != ex["sha256"]:
+        return {"state": "unchecked", "why": "the file changed since it was rendered"}
+    chk = (pj.get("checks") or {}).get(sha) if sha else None
+    if not chk:
+        return {"state": "unchecked", "why": "not checked (studio check)"}
+    open_, excepted = [], []
+    for f in chk.get("failures") or []:
+        x = covering(f, pj.get("exceptions"))
+        if x:
+            excepted.append({**f, "exception": x["id"], "by": x.get("actor"), "why": x.get("why")})
+        else:
+            open_.append(f)
+    return {"state": "failed" if open_ else "ready", "checked": chk["ts"], "by": chk.get("actor"),
+            "failed": sorted({f["rule"] for f in open_}), "open": open_, "excepted": excepted}
+
+def grant_exception(slug, rule, clip=None, why="", actor="cli"):
+    st = state()
+    pj = st["projects"].get(slug)
+    if not pj:
+        raise RuntimeError(f"no project {slug}")
+    rule = rule_id(rule)
+    if rule not in EXCEPTABLE:
+        raise RuntimeError(f"rule {rule!r} can't be excepted; these can: " +
+                           "; ".join(f"{k} ({v})" for k, v in EXCEPTABLE.items()))
+    if len(why.strip()) < 8:
+        raise RuntimeError("say why in words (--why): what the picture or the line does that the rule misses")
+    c = next((c for c in pj["timeline"]["clips"] if c["id"] == clip), None) if clip else None
+    ev = emit("exception.granted", None, id=clip_id(), project=slug, brand=pj.get("brand", "jefe"),
+              rule=rule, clip=clip, **({"label": c["label"]} if c and c.get("label") else {}),
+              why=why.strip(), actor=actor)
+    return ev["data"]
+
+def revoke_exception(slug, xid, why="", actor="cli"):
+    st = state()
+    exs = (st["projects"].get(slug) or {}).get("exceptions") or {}
+    hits = [k for k in exs if k.startswith(xid)] if len(xid) >= 4 else []
+    if len(hits) != 1:
+        raise RuntimeError(f"no exception {xid} in {slug}" if not hits else f"exception id {xid} is ambiguous")
+    x = exs[hits[0]]
+    if x.get("revoked"):
+        raise RuntimeError(f"exception {x['id']} was already revoked")
+    # self-contained, so the revocations read as tuning data on their own
+    emit("exception.revoked", None, id=x["id"], project=slug, brand=x.get("brand"), rule=x["rule"],
+         clip=x.get("clip"), granted_by=x.get("actor"), granted_why=x.get("why"),
+         granted_ts=x.get("ts"), why=(why or "").strip(), actor=actor)
+    return x
+
+
+# ---------- choice: every pick is a labelled preference ---------------------------------------
+# A `choice` event says what was shown (option ids, in the order shown), what was chosen (or
+# none), whether the labels were hidden, and where each option came from (provider, model,
+# prompt version; for a version, its bytes and the story it was rendered from). It's the
+# training set later; it's cheap now and impossible to reconstruct after the fact.
+
+ACTIONS = ("pick", "keep", "rewrite", "reject")
+
+def prompt_version(template):
+    return hashlib.sha256(template.encode()).hexdigest()[:12]
+
+def option_provenance(st, slug, opt):
+    """(kind, provenance) for one option id, where it's known: an export of the project (sha256
+    prefix, file name or path), a moment MEDIA@N, a post draft MEDIA@N:field. Else (None, {})."""
+    pj = st["projects"].get(slug) or {}
+    o = str(opt)
+    for ex in reversed(pj.get("exports") or []):
+        if (len(o) >= 6 and ex.get("sha256", "").startswith(o)) or o in (ex["file"], Path(ex["file"]).name):
+            tl = ex.get("timeline") or {}
+            return "version", {"id": ex["sha256"], "file": ex["file"], "rendered": ex["ts"],
+                               "by": ex.get("actor"), "duration": ex.get("duration"),
+                               "clips": [c.get("id") for c in tl.get("clips", [])],
+                               "timeline_sha": hashlib.sha256(json.dumps(tl, sort_keys=True).encode()).hexdigest()[:12],
+                               "verdict": ex["verdict"]["state"]}
+    m = re.fullmatch(r"([0-9a-f]{4,64})@(\d+)(?::(\w+))?", o)
+    if m:
+        hits = [x for x in st["media"] if x.startswith(m.group(1))]
+        if len(hits) == 1:
+            it, step = st["media"][hits[0]], "draft" if m.group(3) else "moments"
+            s = it["steps"].get(step) or {}
+            return ("draft" if m.group(3) else "moment"), {
+                "id": f"{hits[0]}@{m.group(2)}" + (f":{m.group(3)}" if m.group(3) else ""),
+                "media": hits[0], "n": int(m.group(2)), **({"field": m.group(3)} if m.group(3) else {}),
+                "step_sha256": s.get("sha256"), **(s.get("provenance") or {})}
+    return None, {}
+
+def record_choice(slug, shown, chosen, kind=None, action="pick", blind=False, labels=None,
+                  round_=None, note=None, text=None, actor="cli", options=None):
+    """Log one choice. shown: option ids in the order shown; chosen: one of them, or None (none
+    of these). Provenance is filled in for every option the studio knows; `options` adds what a
+    caller knows itself (e.g. the UI's view of a draft). Returns the event's data."""
+    st = state()
+    if slug not in st["projects"]:
+        raise RuntimeError(f"no project {slug}")
+    if action not in ACTIONS:
+        raise RuntimeError(f"action is one of {', '.join(ACTIONS)}")
+    ids, prov, kinds = [], {}, set()
+    for o in shown:
+        k, p = option_provenance(st, slug, o)
+        oid = p.get("id", str(o))
+        ids.append(oid)
+        prov[oid] = {**p, **((options or {}).get(str(o)) or {})}
+        prov[oid].pop("id", None)
+        kinds.add(k)
+    if len(set(ids)) != len(ids):
+        raise RuntimeError("an option is shown twice")
+    pick = None
+    if chosen is not None:
+        k, p = option_provenance(st, slug, chosen)
+        pick = p.get("id", str(chosen))
+        if pick not in ids:
+            raise RuntimeError(f"{chosen} is not one of the options shown")
+    kind = kind or (kinds.pop() if len(kinds) == 1 and None not in kinds else "other")
+    ev = emit("choice", None, id=clip_id(), project=slug, brand=project_brand(st, slug), kind=kind,
+              action=action, shown=ids, chosen=pick, position=ids.index(pick) if pick else None,
+              blind=bool(blind), **({"labels": labels} if labels else {}),
+              **({"round": round_} if round_ else {}), **({"note": note} if note else {}),
+              **({"text": text} if text is not None else {}),
+              options={k: v for k, v in prov.items() if v}, actor=actor)
+    return ev["data"]
+
+BLIND_LABELS = "ABCDEF"
+
+def blind_round(slug, exports=None, actor="cli", rng=None):
+    """A blind A/B of versions: the exports (default: the two latest) are cloned to
+    projects/P/blind/ROUND/A.mp4, B.mp4, … in a random order, and blind.round logs which is
+    which. `studio choose P A --round ROUND` turns the pick back into the real version."""
+    import random
+    st = state()
+    pj = st["projects"].get(slug)
+    if not pj:
+        raise RuntimeError(f"no project {slug}")
+    exs = pj.get("exports") or []
+    if exports:
+        picked = []
+        for x in exports:
+            k, p = option_provenance(st, slug, x)
+            if k != "version":
+                raise RuntimeError(f"{x} is not an export of {slug} (sha256 prefix or file name)")
+            picked.append(next(e for e in exs if e["sha256"] == p["id"]))
+    else:
+        picked = list(reversed(exs))[:2]
+    picked = list({e["sha256"]: e for e in picked}.values())
+    if not 2 <= len(picked) <= len(BLIND_LABELS):
+        raise RuntimeError(f"a blind round needs 2-{len(BLIND_LABELS)} different versions "
+                           f"({slug} has {len(exs)} export{'s' if len(exs) != 1 else ''})")
+    (rng or random.SystemRandom()).shuffle(picked)
+    rid = clip_id()
+    d = pdir(slug) / "blind" / rid
+    d.mkdir(parents=True)
+    labels = {}
+    for lab, e in zip(BLIND_LABELS, picked):
+        clone_or_copy(HOME / e["file"], d / f"{lab}{Path(e['file']).suffix}")
+        labels[lab] = e["sha256"]
+    emit("blind.round", None, round=rid, project=slug, brand=pj.get("brand", "jefe"), kind="version",
+         labels=labels, dir=str(d.relative_to(HOME)), actor=actor)
+    return rid, d, labels
+
+def choose_blind(slug, rid, label, note=None, actor="cli"):
+    st = state()
+    rnd = ((st["projects"].get(slug) or {}).get("rounds") or {}).get(rid)
+    if not rnd:
+        raise RuntimeError(f"no blind round {rid} in {slug} (studio ab {slug})")
+    labels = rnd["labels"]
+    if label is not None and label.upper() not in labels:
+        raise RuntimeError(f"round {rid} shows {', '.join(labels)}")
+    order = sorted(labels)                       # shown as A, B, ...: the shuffle is in the mapping
+    return record_choice(slug, [labels[x] for x in order],
+                         labels[label.upper()] if label is not None else None, kind="version",
+                         blind=True, labels=labels, round_=rid, note=note, actor=actor)
 
 
 # ---------- helpers ---------------------------------------------------------
@@ -418,6 +663,16 @@ def agent(prompt, cwd, allow_read=False, model=None):
         if not text.strip():
             raise RuntimeError(f"{name}: no reply")
         return text
+
+def step_provenance(task, template, model, item):
+    """Where an AI step's output came from, for the choice log: the agent, the model (None =
+    the agent's own default), the prompt template's version, and the bar and brand it read."""
+    name = agent_name()
+    q = HERE / "QUALITY.md"
+    return {"provider": name, "model": agent_model(name, model), "task": task,
+            "prompt": prompt_version(template),
+            "quality": prompt_version(q.read_text()) if q.exists() else None,
+            "brand": item.get("brand") or "jefe", "brand_file": prompt_version(brand_text(item))}
 
 def parse_json_block(text):
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
@@ -704,6 +959,10 @@ def normalize_timeline(tl, lib, problems=None):
             pass
         if c.get("fit") in FITS:       # absent = the default for that footage (fit_default)
             extra["fit"] = c["fit"]
+        if isinstance(c.get("onscreen"), str) and c["onscreen"].strip():
+            extra["onscreen"] = c["onscreen"].strip()   # drawn/overlay text in the picture (a hook)
+        if c.get("card") is True:      # a designed card (title, text on a plain ground): not "black"
+            extra["card"] = True
         if c.get("voice") in VOICES:   # absent = the story's setting (else natural if spoken)
             extra["voice"] = c["voice"]
         try:                           # absent = 1 (as said)
@@ -1802,6 +2061,7 @@ def moments(item):
         dur=fmt_t(item["duration"]),
         orient=orient, transcript=transcript, every=kf.get("every", "?"),
         kf_index="keyframes/index.json" if kf.get("frames") else "(no keyframes)")
+    prov = step_provenance("moments", MOMENTS_PROMPT, moments_model(agent_name()), item)
     ms = parse_json_block(agent(prompt, cwd=d, allow_read=True, model=moments_model(agent_name())))
     dur = item["duration"]
     clean = []
@@ -1815,7 +2075,7 @@ def moments(item):
         clean.append({**m, "n": len(clean) + 1, "start": round(ns, 2), "end": round(ne, 2), **extra})
     out = d / "moments.json"
     out.write_text(json.dumps(clean, indent=1))
-    return {"moments": len(clean), "sha256": receipt(out)}
+    return {"moments": len(clean), "sha256": receipt(out), "provenance": prov}
 
 def ass_time(t):
     t = max(0.0, t)
@@ -2101,12 +2361,13 @@ def draft(item):
         said = " ".join(w["w"] for w in words if m["start"] <= w["start"] < m["end"])
         lines.append(f"#{m['n']} [{fmt_t(m['start'])}-{fmt_t(m['end'])}] {m['title']} — "
                      f"hook: {m['hook']} — why: {m['why']}\n    said: {said or '(silent)'}")
+    prov = step_provenance("draft", DRAFT_PROMPT, None, item)
     result = agent(DRAFT_PROMPT.format(brand=brand_text(item), name=item["name"],
                                        moments="\n".join(lines)), cwd=d, allow_read=True)
     drafts = parse_json_block(result)
     out = d / "drafts.json"
     out.write_text(json.dumps(drafts, indent=1))
-    return {"posts": len(drafts.get("posts", [])), "sha256": receipt(out)}
+    return {"posts": len(drafts.get("posts", [])), "sha256": receipt(out), "provenance": prov}
 
 STEP_FN = {"proxy": proxy, "speech": speech, "transcribe": transcribe, "keyframes": keyframes,
            "moments": moments, "cut": cut, "draft": draft}
@@ -2416,9 +2677,6 @@ CHECK_CAPTIONS = 0.8            # word agreement (0-1) between captions and the 
 CHECK_FREEZE = 2.0              # a picture that doesn't change for this long reads as frozen
 FILLERS = {"yeah", "so", "um", "uh", "umm", "uhm", "like", "okay", "ok", "and", "but", "anyway",
            "alright", "right"}
-# A clip labelled with one of these words holds a still or a pause on purpose (QUALITY.md: "unless
-# the picture carries it and the clip is labelled as such").
-DELIBERATE = re.compile(r"\b(payoff|reveal|hold|still)\b", re.I)
 FONTS = ["/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/SFNS.ttf",
          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 
@@ -2503,17 +2761,24 @@ def check(slug, path=None, actor="cli"):
     dur = probe(final)["duration"]
     rules = []
     def rule(name, ok, detail, items=None):
+        """items: strings, or (string, clip id) for a failure an exception can name by clip."""
+        items = [x if isinstance(x, tuple) else (x, None) for x in items or []]
         rules.append({"rule": name, "status": ok if isinstance(ok, str) else ("pass" if ok else "fail"),
-                      "detail": detail, **({"items": items} if items else {})})
+                      "detail": detail, "_items": items})
 
     # where the cuts are, on the export's clock, and the speech each clip cuts
     clips, t = [], 0.0
     for c in (tl or {}).get("clips", []):
         it = st["media"].get(c["media"], {})
         regs = (ensure_speech(c["media"]) if it.get("has_audio") else []) or []
-        clips.append({**c, "at": t, "name": it.get("name"), "regions": regs, "pace": clip_pace(c)})
+        clips.append({**c, "at": t, "end": t + clip_len(c), "name": it.get("name"), "regions": regs,
+                      "pace": clip_pace(c), "spoken": bool(it.get("has_audio")) and clip_spoken(c, regs)})
         t += clip_len(c)
     clip_at = lambda x: next((c for c in reversed(clips) if c["at"] <= x + 1e-6), None)
+    cid = lambda x: (c := clip_at(x)) and c["id"]
+    # a clip nobody speaks in (b-roll, a cartoon, a card) is picture: its time is never a pause
+    # between the spoken clips around it, and what VAD hears in it (music, effects) isn't a word
+    picture_only = [(c["at"], c["end"]) for c in clips if not c["spoken"]]
     cuts = cut_list(tl or {})
     # a pause cut: the next clip goes on in the same take a little later, and all it skips is
     # silence (`timeline tighten` makes these). Its edges are judged as one pause, not as the
@@ -2528,7 +2793,7 @@ def check(slug, path=None, actor="cli"):
     if not tl:
         rule("cuts", "skip", "not a studio render (or rendered before check existed): no cut list")
     else:
-        bad, n, run = [], 0, 0.0
+        bad, short, n, run = [], [], 0, 0.0
         for k, c in enumerate(clips, 1):
             a, b, regs, pace = c["in"], c["out"], c["regions"], c["pace"]
             after, before = joined[k - 1], k > 1 and joined[k - 2]
@@ -2555,7 +2820,7 @@ def check(slug, path=None, actor="cli"):
                     bad.append(f"clip {k} tail {tail:.2f}s after the last word (want >= {want}s"
                                + (" at a pause cut)" if after else ")"))
             if not after and run < CHECK_SHORTEST:
-                bad.append(f"clip {k} is {run:.2f}s of speech (want >= {CHECK_SHORTEST}s)")
+                short.append((f"clip {k} is {run:.2f}s of speech (want >= {CHECK_SHORTEST}s)", c["id"]))
         npause = sum(x["kind"] == "pause" for x in cuts)
         npic = sum(x["kind"] == "picture" for x in cuts)
         extra = "".join(f"; {m} {w} cut{'s' if m != 1 else ''} ({why})" for m, w, why in
@@ -2564,23 +2829,44 @@ def check(slug, path=None, actor="cli"):
         rule("cuts", not bad, f"{n} spoken beat{'s' if n != 1 else ''}: " +
              ("every in/out on a speech edge" if not bad else f"{len(bad)} problem{'s' if len(bad) != 1 else ''}"
               " (fix: studio timeline snap P CLIP|all)") + extra, bad)
+        rule("shortest", not short, f"every spoken piece >= {CHECK_SHORTEST}s" if not short else
+             f"{len(short)} spoken piece{'s' if len(short) != 1 else ''} under {CHECK_SHORTEST}s", short)
 
-    # 2-3. the export's own speech: first word, pauses
+    # 2-3. the export's own speech: first word (or declared on-screen text), pauses
     wav = export_wav(final, out_dir / ".audio.wav")
     heard_regions = vad_regions(wav)
-    if heard_regions:
-        fw = heard_regions[0][0]
-        rule("first word", fw <= CHECK_FIRST_WORD, f"first word at {fw:.2f}s (want <= {CHECK_FIRST_WORD}s)")
-        long_ = []
-        for (a0, a1), (b0, b1) in zip(heard_regions, heard_regions[1:]):
-            gap, mid = b0 - a1, (a1 + b0) / 2
-            c = clip_at(mid)
-            if gap > CHECK_PAUSE + CHECK_PAUSE_TOL and not (c and DELIBERATE.search(c.get("label") or "")):
-                long_.append(f"{gap:.2f}s pause at {a1:.2f}s" + (f" (clip {clips.index(c) + 1})" if c else ""))
-        rule("pauses", not long_, f"longest pause {max([b0 - a1 for (_, a1), (b0, _) in zip(heard_regions, heard_regions[1:])] or [0]):.2f}s"
-             f" (want <= {CHECK_PAUSE}s inside speech)", long_)
+    inside = lambda r: any(a - 0.05 <= r[0] and r[1] <= b + 0.05 for a, b in picture_only)
+    talk = [r for r in heard_regions if not inside(r)]
+    text_clip = next((c for c in clips if c.get("onscreen")), None)
+    fw = talk[0][0] if talk else None
+    first = clips[0]["id"] if clips else None
+    if text_clip and (fw is None or text_clip["at"] < fw):
+        tt = text_clip["at"]
+        rule("first word", tt <= CHECK_FIRST_WORD,
+             f"on-screen text at {tt:.2f}s: {text_clip['onscreen'][:60]!r} (declared on clip "
+             f"{clips.index(text_clip) + 1}; want <= {CHECK_FIRST_WORD}s)", [] if tt <= CHECK_FIRST_WORD else
+             [(f"the hook (on-screen text) starts at {tt:.2f}s", first)])
+    elif fw is not None:
+        rule("first word", fw <= CHECK_FIRST_WORD, f"first word at {fw:.2f}s (want <= {CHECK_FIRST_WORD}s)",
+             [] if fw <= CHECK_FIRST_WORD else [(f"first word at {fw:.2f}s", first)])
     else:
-        rule("first word", "skip", "no speech in the export (on-screen text can't be measured: judge it)")
+        rule("first word", "skip", "no speech and no declared on-screen text "
+             "(studio timeline onscreen P CLIP TEXT declares drawn or overlay text)")
+    if talk:
+        long_, gaps = [], []
+        for (a0, a1), (b0, b1) in zip(talk, talk[1:]):
+            pieces = [(a1, b0)]               # the gap, minus the picture-only clips inside it
+            for s0, s1 in picture_only:
+                pieces = [q for x0, x1 in pieces for q in ((x0, min(x1, s0)), (max(x0, s1), x1)) if q[1] - q[0] > 1e-3]
+            for x0, x1 in pieces:
+                gaps.append(x1 - x0)
+                if x1 - x0 > CHECK_PAUSE + CHECK_PAUSE_TOL:
+                    c = clip_at((x0 + x1) / 2)
+                    long_.append((f"{x1 - x0:.2f}s pause at {x0:.2f}s" + (f" (clip {clips.index(c) + 1})" if c else ""),
+                                  c and c["id"]))
+        rule("pauses", not long_, f"longest pause {max(gaps or [0]):.2f}s (want <= {CHECK_PAUSE}s inside "
+             "speech; clips with no speech are picture, not pauses)", long_)
+    else:
         rule("pauses", "skip", "no speech in the export")
 
     # 4. length
@@ -2599,10 +2885,12 @@ def check(slug, path=None, actor="cli"):
 
     # 6. black / frozen picture
     black, frozen = detect_black_freeze(final)
-    meant = lambda a, b: (c := clip_at((a + b) / 2)) is not None and DELIBERATE.search(c.get("label") or "")
-    bad = [f"black {a:.2f}-{b:.2f}s" for a, b in black if not meant(a, b)] + \
-          [f"frozen {a:.2f}-{b:.2f}s" for a, b in frozen if not meant(a, b)]
-    rule("picture", not bad, "no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}", bad)
+    card = lambda a, b: (c := clip_at((a + b) / 2)) is not None and c.get("card")   # designed, not black
+    bad = [(f"black {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in black if not card(a, b)] + \
+          [(f"frozen {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in frozen if not card(a, b)]
+    ncard = sum(bool(c.get("card")) for c in clips)
+    rule("picture", not bad, ("no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}")
+         + (f"; {ncard} designed card{'s' if ncard != 1 else ''} (a held or dark card is meant)" if ncard else ""), bad)
 
     # 7-8. captions against what the export actually says; the last word
     brand = (st["projects"].get(slug) or {}).get("brand") or "jefe"
@@ -2659,17 +2947,57 @@ def check(slug, path=None, actor="cli"):
     except RuntimeError as e:
         print(f"    contact sheet failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
 
+    # every hard failure, by rule and clip; then the exceptions granted for this project
+    failures = [{"rule": r["rule"], "clip": c, "item": i} for r in rules if r["status"] == "fail"
+                for i, c in (r["_items"] or [(r["detail"], None)])]
+    exceptions = (state()["projects"].get(slug) or {}).get("exceptions") or {}
+    for r in rules:
+        items = r.pop("_items")
+        if r["status"] != "fail":
+            if items:
+                r["items"] = [i for i, _ in items]
+            continue
+        open_, exc = [], []
+        for i, c in (items or [(r["detail"], None)]):
+            x = covering({"rule": r["rule"], "clip": c}, exceptions)
+            if x:
+                exc.append({"item": i, "exception": x["id"], "by": x.get("actor"), "why": x.get("why")})
+            else:
+                open_.append(i)
+        if items and open_:
+            r["items"] = open_
+        if exc:
+            r["excepted"] = exc
+            if not open_:
+                r["status"] = "excepted"
     failed = [r["rule"] for r in rules if r["status"] == "fail"]
+    excepted = [{"rule": r["rule"], **x} for r in rules for x in r.get("excepted", [])]
+    sha = receipt(final)
     rel = lambda p: str(p.relative_to(HOME)) if p.resolve().is_relative_to(HOME.resolve()) else str(p)
-    res = {"project": slug, "file": rel(final), "ok": not failed, "failed": failed,
-           "duration": round(dur, 2), "rules": rules, "sheet": rel(out_dir), "images": sheets,
-           "cuts": cuts, "judgment": judgment_rules(),
+    res = {"project": slug, "file": rel(final), "sha256": sha, "ok": not failed, "failed": failed,
+           "excepted": excepted, "duration": round(dur, 2), "rules": rules, "sheet": rel(out_dir),
+           "images": sheets, "cuts": cuts, "judgment": judgment_rules(),
            "heard": " ".join(w["w"] for w in heard)}
     (out_dir / "check.json").write_text(json.dumps(res, indent=1))
-    emit("check.done", None, project=slug, file=res["file"], ok=res["ok"], failed=failed,
-         rules=[{k: v for k, v in r.items() if k != "items"} for r in rules], sheet=res["sheet"],
-         actor=actor)
+    (out_dir / "verdict.txt").write_text(verdict_text(res))
+    emit("check.done", None, project=slug, brand=brand, file=res["file"], sha256=sha, ok=res["ok"],
+         failed=failed, failures=failures, excepted=[x["exception"] for x in excepted],
+         rules=[{k: v for k, v in r.items() if k not in ("items", "excepted")} for r in rules],
+         sheet=res["sheet"], actor=actor)
     return res
+
+CHECK_MARK = {"pass": "pass", "fail": "FAIL", "warn": "warn", "skip": "skip", "excepted": "EXC"}
+
+def verdict_text(r):
+    """The check's verdict as text: printed by `studio check`, and verdict.txt in the review
+    sheet, so an exception is in plain sight wherever the result is read."""
+    out = [f"check {r['file']}  ({r['duration']:.1f}s)  sha256 {r.get('sha256', '?')[:12]}"]
+    for x in r["rules"]:
+        out.append(f"  {CHECK_MARK[x['status']]:<4}  {x['rule']:<10}  {x['detail']}")
+        out += [f"              - {i}" for i in x.get("items", [])]
+        out += [f"              ~ EXCEPTION {e['exception']} by {e.get('by') or '?'}: {e['item']}. "
+                f"Why: {e.get('why')}" for e in x.get("excepted", [])]
+    return "\n".join(out) + "\n"
 
 def _font():
     f = next((x for x in FONTS if Path(x).exists()), None)
@@ -3476,7 +3804,9 @@ def cmd_timeline(a):
                 (f"  (moment {c['moment']})" if c.get("moment") else "")
             voice = clip_voice(c, tl, bool(it.get("has_audio")) and clip_spoken(c))
             tags += (f"  [voice {voice}]" if voice != "off" else "") + \
-                (f"  [pace {clip_pace(c):g}]" if clip_pace(c) != 1.0 else "")
+                (f"  [pace {clip_pace(c):g}]" if clip_pace(c) != 1.0 else "") + \
+                ("  [card]" if c.get("card") else "") + \
+                (f"  [on screen: {c['onscreen'][:40]!r}]" if c.get("onscreen") else "")
             print(f"  {i + 1:>2} {c['id']}  {c['media']}  {fmt_t(c['in'])}–{fmt_t(c['out'])}"
                   f"  ({clip_len(c):.1f}s)  {it.get('name', '?')}  {c.get('label', '')}{tags}")
             for n, p in enumerate(visible_cover(c), 1):
@@ -3606,7 +3936,7 @@ def cmd_timeline(a):
                       f" down to {to:g}s ({cut:.2f}s out)", file=sys.stderr)
             out += pieces
         tl = {**tl, "clips": out}
-    elif a.action in ("trim", "move", "split", "rm", "label", "fit", "cover", "uncover"):
+    elif a.action in ("trim", "move", "split", "rm", "label", "fit", "cover", "uncover", "onscreen", "card"):
         clips = [dict(c) for c in tl["clips"]]
         if not a.args:
             sys.exit(f"timeline {a.action}: which clip? (index or id; see `timeline show`)")
@@ -3659,6 +3989,19 @@ def cmd_timeline(a):
                     c.pop("label", None)
             elif a.action == "rm":
                 clips.pop(i)
+            elif a.action == "onscreen":   # onscreen P CLIP TEXT...: text drawn in its picture
+                text = " ".join(a.args[1:]).strip()
+                if text:
+                    c["onscreen"] = text
+                else:
+                    c.pop("onscreen", None)
+            elif a.action == "card":    # card P CLIP on|off: a designed card, not black picture
+                if a.args[1] not in ("on", "off"):
+                    sys.exit("timeline card PROJECT CLIP on|off")
+                if a.args[1] == "on":
+                    c["card"] = True
+                else:
+                    c.pop("card", None)
             elif a.action == "cover":   # cover P CLIP --with MEDIA IN OUT [--at T] [--fit F]
                 if not a.cover_with:
                     sys.exit("timeline cover PROJECT CLIP --with MEDIA IN OUT [--at T] [--fit fill|fit]")
@@ -3928,22 +4271,123 @@ def cmd_check(a):
     if a.json:
         print(json.dumps(r, indent=1))
     else:
-        mark = {"pass": "pass", "fail": "FAIL", "warn": "warn", "skip": "skip"}
-        print(f"check {r['file']}  ({r['duration']:.1f}s)")
-        for x in r["rules"]:
-            print(f"  {mark[x['status']]:<4}  {x['rule']:<10}  {x['detail']}")
-            for i in x.get("items", []):
-                print(f"              - {i}")
+        print(verdict_text(r), end="")
         print(f"\nreview sheet: {HOME / r['sheet'] if not Path(r['sheet']).is_absolute() else r['sheet']}")
         print("  cut-*.png: frames, waveform (green = speech) and the words heard, 1.5s either side of "
               "each cut (red line); contact.png: the whole export. Look at them.")
         print("\njudgment (answer each honestly before telling the operator it's done; a no sends it back):")
         for j in r["judgment"]:
             print(f"  {j}")
-        print("\n" + ("PASS: every hard rule holds" if r["ok"] else
-                      f"FAIL: {', '.join(r['failed'])}. Fix, render and check again."))
+        if r["excepted"]:
+            print(f"\n{len(r['excepted'])} failure{'s' if len(r['excepted']) != 1 else ''} passed by exception "
+                  "(listed above with why; tell the operator, who may revoke: studio exception ls "
+                  f"{r['project']})")
+        print("\n" + ("PASS: every hard rule holds" + (" (with the exceptions above)" if r["excepted"] else "")
+                      + ". These bytes are ready (studio ready)." if r["ok"] else
+                      f"FAIL: {', '.join(r['failed'])}. Fix, render and check again (or, when the "
+                      "picture or the line justifies it, studio exception grant)."))
     if not r["ok"]:
         sys.exit(1)
+
+def cmd_exception(a):
+    st = state()
+    pj = st["projects"].get(a.project)
+    if not pj:
+        sys.exit(f"no project {a.project} (studio project ls)")
+    try:
+        if a.action == "grant":       # grant P RULE [CLIP] --why TEXT
+            if not a.args:
+                sys.exit("exception grant PROJECT RULE [CLIP] --why TEXT   (rules: "
+                         + ", ".join(EXCEPTABLE) + ")")
+            clip = pj["timeline"]["clips"][clip_index(pj["timeline"]["clips"], a.args[1])]["id"] \
+                if len(a.args) > 1 else None
+            x = grant_exception(a.project, a.args[0], clip, a.why or "", actor=actor_now())
+            print(f"granted {x['id']}: {x['rule']} on " + (f"clip {clip}" if clip else "the whole reel")
+                  + f". Why: {x['why']}\n(the next check passes it and lists it; the operator may "
+                  f"revoke it: studio exception revoke {a.project} {x['id']})")
+            return
+        if a.action == "revoke":      # revoke P ID [--why TEXT]
+            if not a.args:
+                sys.exit("exception revoke PROJECT ID [--why TEXT]")
+            x = revoke_exception(a.project, a.args[0], a.why or "", actor=actor_now())
+            print(f"revoked {x['id']} ({x['rule']}, granted by {x.get('actor') or '?'})")
+            return
+    except RuntimeError as e:
+        sys.exit(f"studio exception: {e}")
+    exs = list((pj.get("exceptions") or {}).values())   # ls
+    if a.json:
+        print(json.dumps(exs, indent=1))
+        return
+    if not exs:
+        print(f"no exceptions in {a.project}. Rules that may bend: "
+              + "; ".join(f"{k} ({v})" for k, v in EXCEPTABLE.items()))
+    for x in exs:
+        if x.get("revoked") and not a.all:
+            continue
+        state_ = (f"REVOKED {x['revoked']['ts']} by {x['revoked'].get('actor') or '?'}"
+                  + (f": {x['revoked']['why']}" if x["revoked"].get("why") else "")) if x.get("revoked") else "granted"
+        print(f"{x['id']}  {x['rule']:<10}  {('clip ' + x['clip']) if x.get('clip') else 'whole reel':<14}  "
+              f"{x.get('actor') or '?'} {x['ts']}  {state_}\n          why: {x.get('why')}")
+
+def cmd_ready(a):
+    """Exit 0 only when the export (default: the latest) is checked, bytes and all."""
+    st = state()
+    pj = st["projects"].get(a.project)
+    if not pj:
+        sys.exit(f"no project {a.project} (studio project ls)")
+    try:
+        final, ex = export_for(st, a.project, a.export)
+    except RuntimeError as e:
+        sys.exit(f"studio ready: {e}")
+    if not ex:
+        sys.exit(f"not ready: {final} is not one of {a.project}'s renders")
+    v = export_verdict(pj, ex, bytes_sha(final) or "missing")
+    latest = ex is pj["exports"][-1]
+    if a.json:
+        print(json.dumps({"file": ex["file"], "sha256": ex["sha256"], "latest": latest, **v}, indent=1))
+    else:
+        if v["state"] == "ready":
+            print(f"ready: {ex['file']}  (checked {v['checked']} by {v.get('by') or '?'})")
+        elif v["state"] == "failed":
+            print(f"not ready: {ex['file']} fails {', '.join(v['failed'])}")
+            for f in v["open"]:
+                print(f"  - {f['rule']}: {f['item']}")
+        else:
+            print(f"not ready: {ex['file']}: {v['why']}")
+        for x in v.get("excepted", []):
+            print(f"  ~ EXCEPTION {x['exception']} by {x.get('by') or '?'}: {x['rule']}: {x['item']}. Why: {x['why']}")
+        if not latest:
+            print(f"  (not the latest export of {a.project})")
+    if v["state"] != "ready":
+        sys.exit(1)
+
+def cmd_choose(a):
+    try:
+        chosen = None if a.chosen.lower() == "none" else a.chosen
+        if a.round:
+            d = choose_blind(a.project, a.round, chosen, note=a.note, actor=actor_now())
+        else:
+            if not a.shown:
+                sys.exit("choose PROJECT CHOSEN|none --from OPT,OPT,... (in the order shown)  "
+                         "| choose PROJECT LABEL --round ROUND")
+            shown = [x.strip() for x in a.shown.split(",") if x.strip()]
+            d = record_choice(a.project, shown, chosen, kind=a.kind, action=a.action,
+                              blind=a.blind, note=a.note, text=a.text, actor=actor_now())
+    except RuntimeError as e:
+        sys.exit(f"studio choose: {e}")
+    print(json.dumps(d, indent=1) if a.json else
+          f"choice {d['id']}: {d['kind']} {d['action']} {d['chosen'] or 'none'} of {len(d['shown'])}"
+          + (f" (blind, round {d['round']})" if d.get("blind") else ""))
+
+def cmd_ab(a):
+    try:
+        rid, d, labels = blind_round(a.project, a.exports or None, actor=actor_now())
+    except RuntimeError as e:
+        sys.exit(f"studio ab: {e}")
+    print(f"blind round {rid}: {len(labels)} versions, labels hidden, order shuffled")
+    for lab in sorted(labels):
+        print(f"  {lab}  {next(d.glob(lab + '.*'))}")
+    print(f"watch them, then: studio choose {a.project} A|B|none --round {rid} [--note TEXT]")
 
 def cmd_bundle(a):
     print(f"bundling into {a.out}")
@@ -4014,7 +4458,7 @@ def main():
     p = sub.add_parser("timeline")
     p.add_argument("action", choices=["show", "add", "clear", "set", "trim", "move", "split", "rm",
                                       "label", "fit", "snap", "cover", "uncover", "voice", "pace",
-                                      "tighten"])
+                                      "tighten", "onscreen", "card"])
     p.add_argument("project"); p.add_argument("args", nargs="*")
     p.add_argument("--at", type=float, metavar="N|T",
                    help="add: insert as clip N (1-based); cover: seconds into the clip (default 0)")
@@ -4036,6 +4480,29 @@ def main():
     p = sub.add_parser("check", help="measure an export against QUALITY.md; review sheet; exit 1 on a fail")
     p.add_argument("project"); p.add_argument("export", nargs="?", help="a render path (default: the latest)")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("ready", help="is the export checked, bytes and all? exit 0 only if ready")
+    p.add_argument("project"); p.add_argument("export", nargs="?", help="a render path (default: the latest)")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("exception", help="grant (with a reason), revoke or list exceptions to a hard rule")
+    p.add_argument("action", choices=["grant", "revoke", "ls"]); p.add_argument("project")
+    p.add_argument("args", nargs="*", metavar="RULE [CLIP] | ID")
+    p.add_argument("--why", help="grant: what the picture or the line does that the rule misses; revoke: why not")
+    p.add_argument("--all", action="store_true", help="ls: revoked ones too")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("choose", help="log a pick (preference data): what was shown, what was chosen")
+    p.add_argument("project"); p.add_argument("chosen", metavar="CHOSEN|none|LABEL")
+    p.add_argument("--from", dest="shown", metavar="OPT,OPT,...",
+                   help="the options in the order shown: export sha256 prefixes or file names, "
+                        "MEDIA@N moments, MEDIA@N:field drafts, or any ids")
+    p.add_argument("--round", metavar="ROUND", help="a blind round from `studio ab`: CHOSEN is its label")
+    p.add_argument("--kind", help="version, moment, draft, hook, caption… (default: from the options)")
+    p.add_argument("--action", default="pick", choices=list(ACTIONS))
+    p.add_argument("--blind", action="store_true", help="the labels were hidden when it was chosen")
+    p.add_argument("--note"); p.add_argument("--text", help="rewrite: the text it became")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("ab", help="blind A/B of versions: shuffled, labels hidden, the mapping logged")
+    p.add_argument("project"); p.add_argument("exports", nargs="*", metavar="EXPORT",
+                                              help="sha256 prefixes or file names (default: the two latest)")
     p = sub.add_parser("notes"); p.add_argument("-p", "--project")
     p.add_argument("--json", action="store_true"); p.add_argument("--since", metavar="TS")
     p.add_argument("--unread", action="store_true", help="only notes newer than the last read")
@@ -4113,6 +4580,14 @@ def main():
         print(render(a.project, actor=actor_now()))
     elif a.cmd == "check":
         cmd_check(a)
+    elif a.cmd == "ready":
+        cmd_ready(a)
+    elif a.cmd == "exception":
+        cmd_exception(a)
+    elif a.cmd == "choose":
+        cmd_choose(a)
+    elif a.cmd == "ab":
+        cmd_ab(a)
     elif a.cmd == "notes":
         cmd_notes(a)
     elif a.cmd == "say":
