@@ -16,7 +16,7 @@ posts you also need the [Claude Code](https://claude.com/claude-code) CLI (`clau
 in. Everything else (python, ffmpeg, whisper) comes from nix.
 
 ```bash
-git clone https://github.com/gudnuf/studio ~/studio && cd ~/studio
+git clone https://github.com/gudnuf/studio ~/code/studio && cd ~/code/studio
 
 # the speech-to-text model: 1.6 GB, stays on your Mac
 mkdir -p ~/.local/share/studio/models
@@ -27,13 +27,16 @@ nix run .#install      # builds Studio.app and puts it in ~/Applications (a few 
 open ~/Applications/Studio.app
 ```
 
+Clone it anywhere except `~/studio`: macOS folder names ignore case, so that is the same
+folder as the default library, `~/Studio`.
+
 Got a shared footage zip from a teammate? Unzip it, then use **File ▸ Import…** in the app,
 or run `./studio import <unzipped folder>`. See [Sharing footage](#sharing-footage-with-a-teammate).
 
 ## Launch the desktop studio
 
 ```bash
-cd ~/studio
+cd ~/code/studio
 ./studio ui            # enters the nix devshell by itself, serves 127.0.0.1:7317 and
                        # opens a Chrome app window (1500x960)
 ```
@@ -49,7 +52,7 @@ by nix. Everything it runs is pinned by `flake.lock`: python3, ffmpeg-full and w
 exact store paths, and studio.py, server.py, ui/ and brands/ are copied into the store.
 
 ```bash
-cd ~/studio
+cd ~/code/studio
 nix build .#studio-app          # → result/Applications/Studio.app (ad-hoc signed)
 nix run .#install               # copy it to ~/Applications (+ a GC root, so the backend it
                                 # points at survives nix-collect-garbage)
