@@ -5,15 +5,18 @@ This is the first piece of our own Eden-style content workspace. The identity la
 approval, distribution) gets built on top of it later.
 
 Two people work in it at once. The **operator** uses the desktop studio, which needs no
-video-editing experience. **Claude**, an expert editor agent, drives the same project from
-the terminal with the `studio` CLI. Both read and write one event log
-(`~/Studio/events.jsonl`), so each side sees the other's edits live.
+video-editing experience. **The agent**, a coding agent working as an expert editor (Claude
+Code, Codex, Goose or any other), drives the same project from the terminal with the `studio`
+CLI. Both read and write one event log (`~/Studio/events.jsonl`), so each side sees the
+other's edits live.
 
 ## Getting started (new Mac)
 
 You need [nix](https://nixos.org/download) with flakes enabled. To find moments and draft
-posts you also need the [Claude Code](https://claude.com/claude-code) CLI (`claude`) signed
-in. Everything else (python, ffmpeg, whisper) comes from nix.
+posts you also need a coding agent's CLI, signed in: Claude Code (`claude`), Codex (`codex`),
+Goose (`goose`), or any other that can answer a prompt from the command line (see
+[Using it with your agent](#using-it-with-your-agent)). Everything else (python, ffmpeg,
+whisper) comes from nix.
 
 ```bash
 git clone https://github.com/gudnuf/studio ~/code/studio && cd ~/code/studio
@@ -42,8 +45,9 @@ cd ~/code/studio
 ```
 
 `./studio ui --port 7400 --no-open` runs it without opening a window. `STUDIO_HOME=/some/dir`
-uses a different library; the default is `~/Studio`. Drafting runs `claude -p` on the Claude
-subscription, so no API key is needed.
+uses a different library; the default is `~/Studio`. Finding moments and drafting run your
+agent's non-interactive mode (`./studio agent` shows which agent and the exact command), on
+whatever plan the agent is signed in with: studio needs no API key of its own.
 
 ## The Mac app
 
@@ -66,16 +70,19 @@ nix develop -c bash -c 'cd desktop && cargo tauri dev'   # iterate: runs ../stud
   (pid, port). The app checks it with `GET /api/health` and attaches if it answers for that
   library: run `./studio ui` in a terminal and the app shares it. Quitting the app stops only a
   server the app started. If the app crashes, its server notices (stdin closes, parent pid
-  changes) and exits within a second, taking its ffmpeg/whisper/claude children with it.
+  changes) and exits within a second, taking its ffmpeg/whisper/agent children with it.
 - **Drops are paths, not uploads.** Files and folders dragged in from Finder (or picked with
   File ▸ Add Footage…, ⌘O) go to `POST /api/ingest-paths`. The server reads them where they are
   and clones them into the library (APFS `clonefile`: a 4 GB file takes no time and no extra
   space; other volumes get a normal copy). The original is never moved or changed. A folder
   brings in the media inside it. The usual rules apply: a file still being copied is waited
   for, unreadable files are refused, duplicates are recognised by hash.
-- **`claude`** isn't in nixpkgs. The app reads your login shell's PATH (`$SHELL -l`), so
-  "Find moments" works from a Dock launch. If it can't be found, or Whisper's model is missing
-  from `~/.local/share/studio/models/`, the footer says so.
+- **The agent CLI** is your own, not nix's. The app reads your login shell's PATH
+  (`$SHELL -l`), so "Find moments" works from a Dock launch; it uses the first of `claude`,
+  `codex`, `goose` it finds there. To choose another, give the app `STUDIO_AGENT` /
+  `STUDIO_AGENT_CMD` (`launchctl setenv STUDIO_AGENT codex`, then reopen it). If the agent
+  can't be found, or Whisper's model is missing from `~/.local/share/studio/models/`, the
+  footer says so.
 - **Menus.** Edit ▸ Undo (⌘Z) undoes typing in a text field and the story everywhere else.
   View ▸ Zoom Story to Fit / Toggle Captions, File ▸ New Project ⌘N, Import… ⇧⌘O, Share
   Project… ⇧⌘S (both with Finder's folder picker), Export ⌘E, Show Library in
@@ -96,7 +103,7 @@ The bar across the top shows these steps, with a tick on each one that's finishe
    drop is the first one ready to play. If the connection drops mid-upload, the file is
    refused ("upload incomplete") rather than added half-finished; add it again.
 2. **Pick moments.** Press **✦ Find moments in all N** at the top of the Footage pane, or the
-   same button in the empty Clip tab. One press does every file: Claude picks the best moments
+   same button in the empty Clip tab. One press does every file: the agent picks the best moments
    and then drafts the posts for them, which takes about a minute. The button and the footer
    count the files as they finish ("2 of 3 files"). When it's done a toast says how many files
    have moments and the first one opens by itself; click any file to see its moments in the
@@ -110,24 +117,28 @@ The bar across the top shows these steps, with a tick on each one that's finishe
    fix straight away. **Frame** picks how the clip fills the picture: **Fill the frame** (crop
    the edges; the default for camera footage) or **Show everything** (the whole picture over a
    blurred copy of itself; the default for screen recordings, so their top bar isn't cut off).
-   ⌘Z undoes. If Claude edits the story, a toast says what changed ("Claude removed “Two hours
-   every night”"), with Undo. A removed clip leaves a red ghost where it was. If you and Claude
-   edit at the same moment, both edits are kept (a toast says so).
+   ⌘Z undoes. If the agent edits the story, a toast says what changed ("The agent removed “Two
+   hours every night”"), with Undo. A removed clip leaves a red ghost where it was. If you and
+   the agent edit at the same moment, both edits are kept (a toast says so).
 4. **Captions & format.** Pick where the video is going (Vertical 9:16 and the others) and
    turn captions on or off. The preview shows the crop (or the fit) and the captions exactly
    as the export will: captions come in chunks of up to 3 words that end at a full stop,
    question mark or comma, so a chunk never runs across two sentences.
 5. **Export & post.** Press **Export**. When the video is ready, a toast and the **Your videos**
    list (top of the left pane) offer **Copy post**. It opens the post drafts for that clip.
-   Rewrite them in your own voice; your rewrites are saved and Claude can read them. Use
+   Rewrite them in your own voice; your rewrites are saved and the agent can read them. Use
    **Finder** to AirDrop the file to your phone.
 
-**Tell Claude** (right pane) is a two-way thread. A note is sent with whatever is selected.
-Notes are ticked "✓ Claude saw this" once Claude has read them, and Claude's replies appear
+**Tell the agent** (right pane) is a two-way thread. A note is sent with whatever is selected.
+Notes are ticked "✓ the agent saw this" once the agent has read them, and its replies appear
 there and as toasts. **Activity** lists who did what, and **Restore** puts back any earlier
 version of the story, even after a reload.
 
-## Claude's CLI (the agent's side)
+## The agent's side: the `studio` CLI
+
+[AGENTS.md](AGENTS.md) is the brief for the agent: how to see what the operator is looking at,
+answer their notes and edit the story without stepping on them. Most coding agents read it by
+themselves when they start in this folder.
 
 Clips are numbered from 1, the way the UI says them: "Clip 3 of 4" is `3` everywhere in the
 CLI (arguments and output). `-1` is the last clip. Clip ids (8 hex characters; 4 or more are
@@ -141,8 +152,8 @@ studio focus --brief              # the same as one line: clip 3 72efa07f 0:27.0
 studio notes [-p P] [--unread] [--json]   # the operator's notes; each one shows what was
                                   # selected when it was written:
                                   #   → clip 2 72efa07f 0:27.0-0:48.0 'Never leaves…' · playhead 0:23.0
-                                  # (when run as Claude, reading a note marks it seen in the UI)
-studio say "On it" --re NOTE_ID   # reply in the operator's Tell Claude thread (+ toast)
+                                  # (when the agent runs it, reading a note marks it seen in the UI)
+studio say "On it" --re NOTE_ID   # reply in the operator's Tell the agent thread (+ toast)
 studio notes --ack NOTE_ID        # mark a note seen without replying
 
 studio ls [-p P]                  # library + finished steps
@@ -166,12 +177,13 @@ studio timeline move P CLIP TO | rm P CLIP | label P CLIP TEXT | clear P | set P
    --base REV    refuse (exit 3) if the story changed since `show` printed rev REV
    --aspect 9:16|16:9|1:1|4:5   --captions on|off
 studio render P                   # export; the UI shows it under "Your videos"
-studio moments|draft|cut ID… | --all     # AI steps (spend subscription). A bare
+studio moments|draft|cut ID… | --all     # AI steps (moments and draft call the agent). A bare
                                   # `studio moments` refuses instead of running every file.
 studio proxy|transcribe|keyframes ID… | --all
 studio bundle OUT_DIR -p P [-p P2 …] | --all [--zip]   # share with a teammate (below)
 studio import BUNDLE_DIR [--no-previews]               # bring a teammate's bundle in
 studio log [-n N]
+studio agent                      # which agent moments/draft call, the command line, the models
 ```
 
 `studio ingest` takes only files that have stopped changing for 3 seconds
@@ -184,6 +196,47 @@ bad file never stops the rest.
 The timeline verbs fail loudly. `trim` with OUT ≤ IN exits 1 and leaves the clip alone.
 Clamping to the media's length prints a `warning:` to stderr. A `set` or `add` that would
 drop a clip (audio-only media, unknown id, zero length) exits 2 and gives the reason.
+
+## Using it with your agent
+
+Moments and post drafts come from a coding agent's non-interactive mode. Studio hands it one
+prompt, runs it in the footage's folder (so it can open the keyframes and the transcript),
+and reads a JSON block out of its reply. Any agent that can do that works.
+
+| Variable | What it does |
+|---|---|
+| `STUDIO_AGENT` | `claude`, `codex` or `goose` (built in). Unset: the first of those on PATH. |
+| `STUDIO_AGENT_CMD` | Any other command: it gets the prompt on stdin and prints the reply. Wins over `STUDIO_AGENT`. |
+| `STUDIO_AGENT_MODEL` | The model for every call (for a custom command, passed in its environment). Unset: the agent's own default. `STUDIO_CLAUDE_MODEL`, its old name, still works with Claude Code. |
+| `STUDIO_MOMENTS_MODEL` | The model for picking moments only. Unset: the agent's default for that (Claude Code: `claude-opus-5-5`); `""`: no override. |
+| `STUDIO_ACTOR` | `agent` or `cli`: who is running the CLI, when it can't tell by itself (below). |
+
+`./studio agent` prints which agent will run, the exact command line and the models. The
+built-in commands (the prompt always goes on stdin):
+
+- **Claude Code:** `claude -p --output-format json [--model M] --allowedTools Read`
+- **Codex:** `codex exec --sandbox read-only --skip-git-repo-check --ephemeral --color never
+  [-m M] -o REPLY_FILE -` (read-only sandbox; the reply is its last message)
+- **Goose:** `goose run --no-session --quiet --output-format json [--model M] -i -`
+- **Anything else:** `STUDIO_AGENT_CMD='llm -m my-model'`, a script of your own, a local
+  model: whatever reads stdin and prints the answer.
+
+**Driving the studio.** Start your agent in this folder and it has the brief,
+[AGENTS.md](AGENTS.md): `studio focus`, `studio notes`, `studio say`, the timeline verbs.
+
+```bash
+cd ~/code/studio
+claude            # Claude Code (reads CLAUDE.md, which points at AGENTS.md)
+codex             # Codex (reads AGENTS.md)
+goose session     # Goose (reads AGENTS.md)
+```
+
+Any other agent: tell it to read `AGENTS.md` first. The CLI records the agent's edits as the
+agent's, so the operator sees "The agent removed …" and gets the "saw this" tick on their
+notes. It knows by the marker each agent sets in the shell it runs commands in: `CLAUDECODE` (Claude Code), `CODEX_THREAD_ID` or
+`CODEX_SANDBOX` (Codex), `GOOSE_TERMINAL` (Goose). For any other agent, have it run with
+`STUDIO_ACTOR=agent`. The agent's events say `"actor": "agent"`; libraries from before this
+say `"claude"`, and both read as the agent.
 
 ## Hardware settings (M4 Max: 14 cores, 32-core GPU, 36 GB)
 
@@ -198,14 +251,15 @@ The defaults are tuned on this machine, so you shouldn't need to change them.
 | Keyframes | Jump the media queue (they read the 720p proxy) | Thumbnails appear right after the preview |
 | Whisper | 1 at a time, Metal, `-t 8`, greedy. WAV extraction happens *before* taking the slot | The GPU lane holds only whisper-cli |
 | Export segments | 4 in parallel (`STUDIO_RENDER_JOBS`) | The VT encoder saturates at about 4 sessions |
-| AI | 3 `claude -p` at once (`STUDIO_AI_LANE`) | "Find moments in all" runs files side by side |
+| AI | 3 agent calls at once (`STUDIO_AI_LANE`) | "Find moments in all" runs files side by side |
 
 Knobs: `STUDIO_HW=0` (libx264 fallback), `STUDIO_HWDEC=0|force`, `STUDIO_PROXY_Q` (55),
 `STUDIO_EXPORT_Q` (65), `STUDIO_PROXY_CHUNKS` (4), `STUDIO_MEDIA_LANE` (2),
-`STUDIO_WHISPER_THREADS` (8), `STUDIO_WHISPER_BEAM` (1), `STUDIO_CLAUDE_MODEL`, `STUDIO_MOMENTS_MODEL` (claude-opus-5-5),
+`STUDIO_WHISPER_THREADS` (8), `STUDIO_WHISPER_BEAM` (1),
 `STUDIO_WHISPER_NST` (0.6, whisper's `--no-speech-thold`), `STUDIO_SETTLE_SECS` (3),
 `STUDIO_UPLOAD_STALL_SECS` (120: an upload that sends nothing for this long is dropped),
 `STUDIO_WHISPER_MODEL` (default `~/.local/share/studio/models/ggml-large-v3-turbo.bin`).
+The agent's knobs are under [Using it with your agent](#using-it-with-your-agent).
 
 ## Words: vocabulary and fixes
 
@@ -281,8 +335,11 @@ the broken line is skipped with a warning and the next event is kept.
 - fixtures, cached in `~/.cache/studio-fixtures`. They include `iphone-hdr.mov`, a 4K HEVC
   10-bit HLG file like the iPhone default.
 - CLI and API tests.
-- `test/ui_smoke.py`: the whole operator path in headless Chrome, with `claude -p` replaced by
-  `test/fakebin/claude`.
+- The agent adapters: moments and draft through fakes that speak each CLI's surface
+  (`test/fakebin/claude`, `test/fakeagents/codex`, `test/fakeagents/goose`) and through a
+  custom `STUDIO_AGENT_CMD` (`test/fakebin/fake-agent`).
+- `test/ui_smoke.py`: the whole operator path in headless Chrome, with the agent replaced by
+  `test/fakebin/fake-agent` (canned answers).
 - `test/webkit_smoke.py`: the core path in Safari (the Mac app's engine) through safaridriver.
   Skipped until Safari's remote automation is turned on once: `sudo safaridriver --enable`.
 - `test/app_smoke.py`: the built app (`result/`), launched like the Dock does, driven through
@@ -291,7 +348,7 @@ the broken line is skipped with a warning and the next event is kept.
 - A benchmark with budgets.
 
 Everything runs in throwaway homes on ports 7400-7499 (`STUDIO_TEST_PORTS=7700-7799` picks
-another range). Nothing touches `~/Studio` or spends subscription. `test/ui_smoke.md` is the
+another range). Nothing touches `~/Studio` or calls a real agent. `test/ui_smoke.md` is the
 manual walk-through.
 
 ## Batch mode (no UI)
@@ -322,7 +379,8 @@ intellectual-signature interview produces a real brand document.
   (11–16 s instead of 6.6 s for 48 s of video) because both share the media engine. It still
   starts at once.
 - Whisper loads the model for each file (~1 s). There's no batching or resident whisper-server.
-- "Find moments" needs the network and the Claude subscription. Everything else works offline.
+- "Find moments" needs the network and a signed-in agent (unless yours runs a local model).
+  Everything else works offline.
 - The undo stack is per window and in memory. After a reload, use Activity → **Restore**.
 - Post rewrites are tied to the moment they belong to. **Find again** replaces the moments,
   so it asks first and then drops the old rewrites.
