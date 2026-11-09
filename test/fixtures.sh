@@ -14,6 +14,11 @@
 #                        (BT.2020, arib-std-b67), landscape, 90s, ~40 Mb/s, speech + noise.
 #                        The heavy path: VideoToolbox decode + HDR->SDR on every proxy/export.
 #   junk.txt             not media; ingest must skip it
+#   bursts.mov           quality fixture: portrait, three spoken sentences with known silences
+#                        between them (room tone), and 0.36s of black picture mid second gap;
+#                        bursts.json has the spans (speech, black) in seconds
+#   broll-roomtone.mov   quality fixture: 8s of moving picture over room tone, nobody talking
+#                        (whisper alone hears "Thank you." in it)
 #
 # Cached by content: a stamp of this script's bytes + tool versions lives in OUT_DIR/.stamp;
 # reruns with an unchanged script are instant. Prints OUT_DIR on stdout (last line).
@@ -28,7 +33,8 @@ for t in ffmpeg ffprobe say shasum; do
   command -v "$t" >/dev/null || { echo "fixtures.sh: '$t' not on PATH (run inside nix develop)" >&2; exit 2; }
 done
 
-files=(phone-talking.mov screen-recording.mp4 site-walk.mov voice-memo.m4a iphone-hdr.mov junk.txt)
+files=(phone-talking.mov screen-recording.mp4 site-walk.mov voice-memo.m4a iphone-hdr.mov junk.txt
+       bursts.mov bursts.json broll-roomtone.mov)
 stamp=$( { cat "${BASH_SOURCE[0]}"; ffmpeg -version | head -1; } | shasum -a 256 | cut -c1-16)
 if [[ -f "$out/.stamp" && "$(cat "$out/.stamp")" == "$stamp" ]]; then
   ok=1; for f in "${files[@]}"; do [[ -s "$out/$f" ]] || ok=0; done
@@ -143,6 +149,41 @@ format=p010le" -i "$work/hdr.m4a" -map 0:v -map 1:a -c:v hevc_videotoolbox -prof
  || ff -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=$H,format=yuv420p10le" -i "$work/hdr.m4a" \
       -map 0:v -map 1:a -c:v libx265 -preset ultrafast -x265-params log-level=error -tag:v hvc1 \
       -color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc -c:a copy -shortest "$out/iphone-hdr.mov"
+
+# --- bursts.mov + bursts.json: speech with known gaps, a black stretch ----------------------
+# Each sentence is trimmed to its own sound, then laid out on room tone with set silences, so
+# where the speech is (to ~30 ms) is known by construction.
+say -v Samantha -r 175 -o "$work/b1.aiff" "Last week I walked a property with forty sprinkler heads."
+say -v Samantha -r 175 -o "$work/b2.aiff" "I used to spend two hours every night typing up estimates."
+say -v Samantha -r 175 -o "$work/b3.aiff" "Now the estimate is written before I reach the truck."
+trim="silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse"
+for i in 1 2 3; do ff -i "$work/b$i.aiff" -af "aresample=48000,$trim" -ac 1 -c:a pcm_s16le "$work/b$i.wav"; done
+gaps=(0.8 1.2 0.9 1.5)                   # before sentence 1, between 1-2, 2-3, after 3
+t=${gaps[0]} spans="" parts=()
+for i in 1 2 3; do
+  d=$(dur "$work/b$i.wav")
+  ff -f lavfi -i "anullsrc=r=48000:cl=mono" -t "${gaps[$((i - 1))]}" -c:a pcm_s16le "$work/g$i.wav"
+  parts+=("$work/g$i.wav" "$work/b$i.wav")
+  spans+="${spans:+, }[$t, $(echo "$t + $d" | bc -l)]"
+  t=$(echo "$t + $d + ${gaps[$i]}" | bc -l)
+done
+ff -f lavfi -i "anullsrc=r=48000:cl=mono" -t "${gaps[3]}" -c:a pcm_s16le "$work/g4.wav"
+parts+=("$work/g4.wav")
+printf "file '%s'\n" "${parts[@]}" > "$work/bursts.txt"
+B=$(echo "$t" | bc -l)
+ff -f concat -safe 0 -i "$work/bursts.txt" -f lavfi -i "anoisesrc=color=brown:amplitude=0.004:duration=$B:sample_rate=48000" \
+   -filter_complex "[0][1]amix=inputs=2:duration=first:normalize=0[a]" -map "[a]" -c:a pcm_s16le "$work/bursts.wav"
+b2end=$(python3 -c "import json; print(json.loads('[${spans}]')[1][1])")
+k0=$(echo "$b2end + 0.42" | bc -l); k1=$(echo "$b2end + 0.78" | bc -l)   # clear of snapped tails/lead-ins
+ff -f lavfi -i "testsrc2=size=1080x1920:rate=30:duration=$B" -i "$work/bursts.wav" \
+   -vf "drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='between(t,$k0,$k1)'" \
+   -map 0:v -map 1:a -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 160k -shortest "$out/bursts.mov"
+printf '{"speech": [%s], "black": [%s, %s]}\n' "$spans" "$k0" "$k1" > "$out/bursts.json"
+
+# --- broll-roomtone.mov: picture over room tone, no speech ---------------------------------
+ff -f lavfi -i "testsrc2=size=1080x1920:rate=30:duration=8" \
+   -f lavfi -i "anoisesrc=color=brown:amplitude=0.01:duration=8:sample_rate=48000" \
+   -map 0:v -map 1:a -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 128k "$out/broll-roomtone.mov"
 
 # --- voice-memo.m4a + junk.txt ---------------------------------------------------------
 ff -i "$work/memo.aiff" -ar 48000 -ac 1 -c:a aac -b:a 96k "$out/voice-memo.m4a"

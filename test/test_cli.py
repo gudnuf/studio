@@ -231,11 +231,18 @@ class CLI(unittest.TestCase):
         pt = self.mid("phone-talking.mov")
         ms = H.fake_moments(self.home, pt, self.dur("phone-talking.mov"), n=3, title="Kitchen table")
         self.S.HOME = self.home
-        H.cli(self.home, "timeline", "add", slug, f"{pt}@2")
+        H.cli(self.home, "timeline", "add", slug, f"{pt}@2", "--no-snap")
         c = self.tl(slug)["clips"][0]
         self.assertEqual((c["in"], c["out"]), (ms[1]["start"], ms[1]["end"]))
         self.assertEqual(c.get("label"), "Kitchen table 2")
         self.assertIn("moments", self.st()["media"][pt]["steps"])
+        # by default a moment goes on speech edges; this fixture talks without a pause, so
+        # the cuts stay where they were asked, at the quietest moment nearby
+        H.cli(self.home, "timeline", "add", slug, f"{pt}@2")
+        c = self.tl(slug)["clips"][1]
+        self.assertLessEqual(abs(c["in"] - ms[1]["start"]), 0.4, c)
+        self.assertLessEqual(abs(c["out"] - ms[1]["end"]), 0.6, c)
+        self.assertEqual(c.get("moment"), 2)
 
     def test_timeline_actor(self):
         slug = self.project("Actor")
@@ -629,6 +636,10 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
   open(of + ".json", "w"))
 """)
         (fake / "whisper-cli").chmod(0o755)
+        # speech everywhere (one region from 0): whisper's --vad timeline is then the file's own
+        (fake / "whisper-vad-speech-segments").write_text(
+            "#!/bin/sh\necho 'Detected 1 speech segments:'\necho 'Speech segment 0: start = 0.00, end = 800.00'\n")
+        (fake / "whisper-vad-speech-segments").chmod(0o755)
         S = H.import_studio(home)
         d = home / "media" / "f00d00000001"; d.mkdir()
         import wave, array
@@ -650,6 +661,12 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
         self.assertIn("Jefe", argv[argv.index("--prompt") + 1])
         self.assertIn("aerate", argv[argv.index("--prompt") + 1])
         self.assertIn("-nth", argv)
+        # the hallucination gate: whisper hears only Silero's speech, no non-speech tokens
+        self.assertIn("--vad", argv)
+        self.assertTrue(argv[argv.index("-vm") + 1].endswith(".bin"), argv)
+        self.assertIn("-sns", argv)
+        self.assertEqual(argv[argv.index("-mc") + 1], "0")
+        self.assertIn("--carry-initial-prompt", argv, "-mc 0 alone would drop the vocabulary")
         tx = json.loads((d / "transcript.json").read_text())
         self.assertEqual([w["w"] for w in tx["words"]], ["Jefe", "walks", "the", "yard."])
         self.assertEqual([s["text"] for s in tx["segments"]], ["Jefe walks the yard."],
@@ -1045,6 +1062,262 @@ json.dump({{"result": {{"language": "en"}}, "transcription": [
         self.assertIn("still zipped", r.stderr)
         r = H.cli(home, "import", home, check=False)
         self.assertIn("isn't a studio bundle", r.stderr)
+
+
+@unittest.skipUnless(H.have_tools(*NEEDS, "whisper-vad-speech-segments"),
+                     "needs ffmpeg/whisper-cli/whisper-vad-speech-segments (run in nix develop)")
+class Quality(unittest.TestCase):
+    """Speech edges, the hallucination gate, render loudness and `studio check` (QUALITY.md),
+    on fixtures whose speech is known by construction (test/fixtures.sh): bursts.mov is three
+    sentences with 1.2s and 0.9s of room tone between them and 0.36s of black picture in the
+    second gap; broll-roomtone.mov is picture over room tone, nobody talking."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fx = H.fixtures()
+        cls.known = json.loads((cls.fx / "bursts.json").read_text())
+        cls.home = H.new_home("quality")
+        H.cli(cls.home, "ingest", "-p", "q", cls.fx / "bursts.mov", cls.fx / "broll-roomtone.mov")
+        cls.S = H.import_studio(cls.home)
+        ids = {it["name"]: m for m, it in cls.S.state()["media"].items()}
+        cls.b, cls.r = ids["bursts.mov"], ids["broll-roomtone.mov"]
+
+    def setUp(self):
+        self.S.HOME = self.home
+
+    def regions(self, mid=None):
+        return json.loads((self.home / "media" / (mid or self.b) / "speech.json").read_text())["regions"]
+
+    def project(self, name):
+        return H.cli(self.home, "project", "new", name).stdout.strip().splitlines()[-1]
+
+    def clips(self, slug):
+        return self.S.state()["projects"][slug]["timeline"]["clips"]
+
+    def check(self, slug, *extra):
+        r = H.cli(self.home, "check", slug, *extra, "--json", check=False, timeout=900)
+        self.assertIn(r.returncode, (0, 1), r.stderr[-2000:])
+        res = json.loads(r.stdout)
+        self.assertEqual(r.returncode, 0 if res["ok"] else 1, "exit code follows the hard rules")
+        return res, {x["rule"]: x for x in res["rules"]}
+
+    def render_clip(self, name, a, b, snap=True, media=None):
+        slug = self.project(name)
+        H.cli(self.home, "timeline", "add", slug, media or self.b, a, b, *(["--snap"] if snap else []))
+        H.cli(self.home, "render", slug, timeout=900)
+        return slug
+
+    def assert_on_edges(self, a, b, regs):
+        for r in regs:
+            self.assertFalse(r[0] < a < r[1], f"in {a} inside speech {r}")
+            self.assertFalse(r[0] < b < r[1], f"out {b} inside speech {r}")
+        first = min(r[0] for r in regs if r[0] >= a)
+        last = max(r[1] for r in regs if r[1] <= b)
+        self.assertTrue(0.05 <= first - a <= 0.15, f"lead-in {first - a:.3f}")
+        self.assertGreaterEqual(b - last, 0.25, f"tail {b - last:.3f}")
+
+    # ---- speech regions + the hallucination gate ----
+    def test_speech_regions_match_the_known_speech(self):
+        regs = self.regions()
+        self.assertEqual(len(regs), 3, regs)
+        for (a, b), (ka, kb) in zip(regs, self.known["speech"]):
+            self.assertLess(abs(a - ka), 0.15, (a, ka))
+            self.assertLess(abs(b - kb), 0.2, (b, kb))
+        st = self.S.state()["media"][self.b]["steps"]
+        self.assertEqual(st["speech"]["regions"], 3)
+        self.assertEqual(st["transcribe"]["speech"], 3)
+        # every word sits inside the speech whisper heard (its times are mapped back from
+        # --vad's shortened audio), and the sentences all came through
+        tx = json.loads((self.home / "media" / self.b / "transcript.json").read_text())
+        text = " ".join(w["w"] for w in tx["words"]).lower()
+        for w in ("sprinkler", "hours", "truck"):
+            self.assertIn(w, text)
+        for w in tx["words"]:
+            self.assertTrue(any(a - 0.05 <= w["start"] and w["end"] <= b + 0.15 for a, b in regs), w)
+
+    def test_silent_clip_has_an_empty_transcript(self):
+        self.assertEqual(self.regions(self.r), [])
+        tx = json.loads((self.home / "media" / self.r / "transcript.json").read_text())
+        self.assertEqual((tx["words"], tx["segments"]), ([], []), "invented words on b-roll")
+        self.assertEqual(self.S.state()["media"][self.r]["steps"]["transcribe"]["words"], 0)
+
+    def test_hallucination_phrases_are_dropped(self):
+        segs = [{"start": 0, "end": 2, "text": "The mulch is gone."},
+                {"start": 2, "end": 3, "text": "Thanks for watching!"},
+                {"start": 3, "end": 5, "text": "Subtitles by the Amara.org community"},
+                {"start": 5, "end": 7, "text": "Front beds need three yards."}]
+        words = [{"w": t, "start": s["start"], "end": s["end"], "_seg": i}
+                 for i, s in enumerate(segs) for t in s["text"].split()]
+        segs2, words2, dropped = self.S.drop_hallucinations(segs, words)
+        self.assertEqual([s["text"] for s in segs2], ["The mulch is gone.", "Front beds need three yards."])
+        self.assertEqual(len(dropped), 2)
+        self.assertNotIn("watching!", [w["w"] for w in words2])
+
+    # ---- snapping ----
+    def test_snap_clip_rules(self):
+        R = [[1.0, 3.0], [3.4, 6.0], [6.05, 8.0], [10.0, 11.0], [14.0, 19.0]]
+        snap = self.S.snap_clip
+        a, b, why = snap(1.5, 2.5, R, 20)              # both points inside one phrase
+        self.assertEqual((a, b), (0.93, 3.26))
+        self.assertIn("inside speech", why)
+        a, b, _ = snap(0.2, 2.0, R, 20)                 # dead air before the first word goes
+        self.assertEqual(a, 0.93)
+        a, b, _ = snap(3.5, 5.0, R, 20)                 # out: a 0.05s gap, no room for the tail
+        self.assertEqual((a, b), (3.33, 6.025))         #   -> halfway, never in the next phrase
+        a, b, _ = snap(6.5, 7.5, R, 20)                 # in: the same gap from the other side
+        self.assertEqual((a, b), (6.025, 8.26))
+        self.assertEqual(snap(8.5, 9.8, R, 20), (8.5, 9.8, None), "a silent shot is left alone")
+        a, b, _ = snap(2.95, 5.0, R, 20)                # grazes the phrase before: left out
+        self.assertEqual(a, 3.33)
+        # whisper's early word end put the out point before the last word's phrase began
+        a, b, _ = snap(3.5, 9.9, R, 20, [{"w": "estimate.", "start": 9.8}])
+        self.assertEqual(b, 11.26)
+        # deep in a long run of speech: no edge within reach, so the cut stays near (the
+        # quietest moment there; here a stand-in that says where it was asked to look)
+        a, b, why = snap(16.5, 17.0, R, 30, quiet=lambda t, lo, hi: round(t + 0.1, 3))
+        self.assertEqual((a, b), (16.6, 17.1))
+        self.assertIn("deep in a run of speech", why)
+        self.assertEqual(snap(*snap(1.5, 2.5, R, 20)[:2], R, 20)[2], None, "snapping is idempotent")
+
+    def test_snap_lands_outside_speech(self):
+        (self.home / "media" / self.b / "speech.json").unlink()   # older media: made on demand
+        regs = self.known["speech"]
+        slug = self.project("Snap")
+        mid1 = regs[0][0] + 0.8                 # inside speech, within reach of its edges
+        mid2 = regs[1][1] - 0.8
+        H.cli(self.home, "timeline", "add", slug, self.b, mid1, mid2, "--snap")
+        self.assertTrue((self.home / "media" / self.b / "speech.json").exists())
+        c = self.clips(slug)[0]
+        self.assert_on_edges(c["in"], c["out"], self.regions())
+        self.assertLess(c["in"], regs[0][0], "the in point starts before the first word")
+        self.assertGreater(c["out"], regs[1][1] + 0.2, "the out point is past the last word")
+        # trailing dead air goes too
+        H.cli(self.home, "timeline", "add", slug, self.b, regs[2][0] - 0.6, regs[2][1] + 1.2, "--snap")
+        c = self.clips(slug)[1]
+        self.assert_on_edges(c["in"], c["out"], self.regions())
+        # a trim without --snap is exactly what was asked (a person's trim is never fought)
+        H.cli(self.home, "timeline", "trim", slug, c["id"], mid1, mid2)
+        c = self.clips(slug)[1]
+        self.assertEqual((c["in"], c["out"]), (round(mid1, 3), round(mid2, 3)))
+        out = H.cli(self.home, "timeline", "snap", slug, "all").stderr
+        self.assertIn("snapped", out)
+        for c in self.clips(slug):
+            self.assert_on_edges(c["in"], c["out"], self.regions())
+
+    def test_moments_snap_by_default(self):
+        ms = [{"n": 1, "start": round(self.known["speech"][0][0] + 0.3, 2),
+               "end": round(self.known["speech"][0][1] - 0.4, 2), "title": "Heads", "hook": "h",
+               "why": "w", "angle": "past-self", "kind": "talking"}]
+        (self.home / "media" / self.b / "moments.json").write_text(json.dumps(ms))
+        self.S.emit("step.moments", self.b, moments=1, fixture=True)
+        slug = self.project("Moment snap")
+        H.cli(self.home, "timeline", "add", slug, f"{self.b}@1")
+        c = self.clips(slug)[0]
+        self.assert_on_edges(c["in"], c["out"], self.regions())
+        H.cli(self.home, "timeline", "add", slug, f"{self.b}@1", "--no-snap")
+        c = self.clips(slug)[1]
+        self.assertEqual((c["in"], c["out"]), (ms[0]["start"], ms[0]["end"]))
+
+    def test_moments_prompt_carries_quality_and_may_be_empty(self):
+        agent = self.home / "empty-agent"
+        agent.write_text(f"#!/bin/sh\ncat > {self.home / 'prompt.txt'}\necho '[]'\n")
+        agent.chmod(0o755)
+        H.cli(self.home, "moments", self.r, env=H.env_for(self.home, STUDIO_AGENT_CMD=str(agent)))
+        prompt = (self.home / "prompt.txt").read_text()
+        self.assertIn("THE BAR (QUALITY.md)", prompt)
+        self.assertIn("One takeaway", prompt)
+        self.assertIn("return []", prompt)
+        self.assertEqual(self.S.state()["media"][self.r]["steps"]["moments"]["moments"], 0)
+
+    # ---- render ----
+    def test_render_meets_the_loudness_target(self):
+        slug = self.render_clip("Loud", 0.5, self.known["speech"][1][1])
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]["data"]
+        self.assertTrue(ev["loudness"]["normalized"])
+        self.assertEqual(len(ev["timeline"]["clips"]), 1, "the cut list travels with the export")
+        import subprocess
+        r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(self.home / ev["file"]), "-vn",
+                            "-af", "loudnorm=print_format=json", "-f", "null", "-"], capture_output=True, text=True)
+        m = json.loads(r.stderr[r.stderr.rindex("{"):r.stderr.rindex("}") + 1])
+        self.assertLessEqual(abs(float(m["input_i"]) + 14), 1.0, m)
+        self.assertLessEqual(float(m["input_tp"]), -1.0, m)
+        self.assertEqual(H.ffprobe(self.home / ev["file"])["vcodec"], "h264")
+
+    # ---- check ----
+    def test_check_passes_snapped_cuts_and_writes_a_review_sheet(self):
+        slug = self.render_clip("Clean", 0.5, 3.0)       # sentence 1, snapped
+        res, r = self.check(slug)
+        for k in ("cuts", "first word", "pauses", "loudness", "picture", "captions", "ending"):
+            self.assertEqual(r[k]["status"], "pass", r[k])
+        self.assertEqual(r["length"]["status"], "fail", "3s is under the 15s minimum")
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["failed"], ["length"])
+        d = self.home / res["sheet"]
+        self.assertEqual(d.parent, (self.home / res["file"]).parent, "the sheet sits next to the export")
+        pngs = sorted(p.name for p in d.glob("*.png"))
+        self.assertIn("contact.png", pngs)
+        self.assertEqual(len([p for p in pngs if p.startswith("cut-")]), 2, pngs)   # start + end
+        for p in pngs:
+            self.assertEqual((d / p).read_bytes()[:4], b"\x89PNG")
+        self.assertTrue(res["judgment"] and res["judgment"][0].startswith("1. One takeaway"))
+        ev = [e for e in H.events(self.home) if e["type"] == "check.done"][-1]["data"]
+        self.assertEqual((ev["project"], ev["ok"], ev["failed"]), (slug, False, ["length"]))
+        self.assertTrue((d / "check.json").exists())
+
+    def test_check_catches_a_cut_inside_speech(self):
+        regs = self.known["speech"]
+        slug = self.render_clip("Clipped", regs[0][0] + 0.4, regs[0][1] - 0.6, snap=False)
+        res, r = self.check(slug)
+        self.assertEqual(r["cuts"]["status"], "fail")
+        self.assertTrue(any(i.startswith("clip 1 in ") and "inside speech" in i for i in r["cuts"]["items"]), r["cuts"])
+        self.assertTrue(any(i.startswith("clip 1 out ") and "inside speech" in i for i in r["cuts"]["items"]), r["cuts"])
+        self.assertIn("cuts", res["failed"])
+
+    def test_check_catches_a_long_pause(self):
+        regs = self.known["speech"]
+        slug = self.render_clip("Pause", regs[0][0], regs[1][1])     # 1.2s of room tone inside
+        res, r = self.check(slug)
+        self.assertEqual(r["cuts"]["status"], "pass", r["cuts"])
+        self.assertEqual(r["pauses"]["status"], "fail")
+        self.assertEqual(len(r["pauses"]["items"]), 1, r["pauses"])
+        gap = float(r["pauses"]["items"][0].split("s pause")[0])
+        self.assertAlmostEqual(gap, regs[1][0] - regs[0][1], delta=0.25)
+        self.assertEqual(r["picture"]["status"], "pass")
+
+    def test_check_catches_a_black_segment(self):
+        regs = self.known["speech"]
+        slug = self.render_clip("Black", regs[1][0], regs[2][1])     # black in the second gap
+        res, r = self.check(slug)
+        self.assertEqual(r["picture"]["status"], "fail")
+        self.assertTrue(any(i.startswith("black") for i in r["picture"]["items"]), r["picture"])
+
+    def test_check_catches_wrong_loudness(self):
+        slug = self.render_clip("Quiet", 0.5, 3.0)
+        final = self.home / self.S.state()["projects"][slug]["exports"][-1]["file"]
+        quiet = final.with_name("quiet.mp4")
+        import subprocess
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(final), "-c:v", "copy", "-af", "volume=-12dB",
+                        "-c:a", "aac", str(quiet)], check=True)
+        res, r = self.check(slug, quiet)
+        self.assertEqual(r["loudness"]["status"], "fail", r["loudness"])
+        self.assertEqual(r["cuts"]["status"], "skip", "an outside file has no cut list")
+        self.assertTrue((quiet.parent / "quiet.check" / "contact.png").exists())
+
+    def test_check_catches_invented_captions(self):
+        # what whisper used to do on b-roll: a sentence nobody said, burned in as captions
+        d = self.home / "media" / self.r
+        saved = (d / "transcript.json").read_text()
+        words = [{"w": w, "start": 2 + i * 0.4, "end": 2.35 + i * 0.4}
+                 for i, w in enumerate("Thank you so much for watching.".split())]
+        (d / "transcript.json").write_text(json.dumps({"language": "en", "words": words,
+                                                       "segments": [{"start": 2, "end": 4.4, "text": "Thank you so much for watching."}]}))
+        try:
+            slug = self.render_clip("Broll", 0.5, 7.5, media=self.r)
+            res, r = self.check(slug)
+        finally:
+            (d / "transcript.json").write_text(saved)
+        self.assertEqual(r["captions"]["status"], "fail", r["captions"])
+        self.assertEqual(r["cuts"]["status"], "pass", "no speech: nothing to cut into")
 
 
 @unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")

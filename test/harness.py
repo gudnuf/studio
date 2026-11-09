@@ -13,6 +13,8 @@ STUDIO_PY = ROOT / "studio.py"
 FIXTURE_FILES = ["phone-talking.mov", "screen-recording.mp4", "site-walk.mov",
                  "voice-memo.m4a", "junk.txt"]
 REAL_HOME = Path.home() / "Studio"
+# made by fixtures.sh too, but not ingested by the CLI suite's shared home
+QUALITY_FIXTURES = ["bursts.mov", "bursts.json", "broll-roomtone.mov"]
 
 
 def have_tools(*tools):
@@ -37,7 +39,7 @@ def new_home(label="home"):
 def fixtures():
     """Path to the fixture dir, generating (cached) via fixtures.sh if needed."""
     d = os.environ.get("STUDIO_FIXTURES")
-    if d and all((Path(d) / f).exists() for f in FIXTURE_FILES):
+    if d and all((Path(d) / f).exists() for f in FIXTURE_FILES + QUALITY_FIXTURES):
         return Path(d)
     cmd = ["bash", str(TEST_DIR / "fixtures.sh")] + ([d] if d else [])
     out = subprocess.run(cmd, capture_output=True, text=True)
