@@ -124,8 +124,9 @@ The bar across the top shows these steps, with a tick on each one that's finishe
    turn captions on or off. The preview shows the crop (or the fit) and the captions exactly
    as the export will: captions come in chunks of up to 3 words that end at a full stop,
    question mark or comma, so a chunk never runs across two sentences.
-5. **Export & post.** Press **Export**. When the video is ready, a toast and the **Your videos**
-   list (top of the left pane) offer **Copy post**. It opens the post drafts for that clip.
+5. **Export & post.** Press **Export**. When it's exported, a toast and the **Your videos**
+   list (top of the left pane) offer **Check** and **Copy post**. It says **Ready** only once a
+   check of that exact file passes. It opens the post drafts for that clip.
    Rewrite them in your own voice; your rewrites are saved and the agent can read them. Use
    **Finder** to AirDrop the file to your phone.
 
@@ -186,6 +187,12 @@ studio timeline tighten P CLIP|all [--max 0.35] [--to 0.12]   # cut long pauses 
    --aspect 9:16|16:9|1:1|4:5   --captions on|off
 studio render P                   # export (loudness -14 LUFS); the UI shows it under "Your videos"
 studio check P [EXPORT] [--json]  # measure the export against QUALITY.md; review sheet; exit 1 on a fail
+studio ready P [EXPORT] [--json]  # exit 0 only if a check of these exact bytes passes
+studio exception grant P RULE [CLIP] --why TEXT | revoke P ID [--why TEXT] | ls P [--all]
+studio timeline onscreen P CLIP TEXT…   # declare on-screen text (a hook); no TEXT clears it
+studio timeline card P CLIP on|off       # a designed card: not "black picture"
+studio choose P CHOSEN|none --from A,B,C [--action pick|keep|rewrite|reject] [--note T]
+studio ab P [EXPORT…]             # blind A/B of versions; then: choose P A --round ROUND
 studio moments|draft|cut ID… | --all     # AI steps (moments and draft call the agent). A bare
                                   # `studio moments` refuses instead of running every file.
 studio proxy|speech|transcribe|keyframes ID… | --all   # speech: where someone talks (below)
@@ -241,14 +248,33 @@ in/out point against the speech (lead-in 0.05–0.15 s, tail ≥ 0.25 s, never i
 spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 0.35 s, VAD on the
 export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
 frozen picture (`blackdetect`, `freezedetect`), captions against a fresh transcription of the
-export (≥ 80% of words agree), and the last word (not filler). A clip labelled "payoff",
-"reveal", "hold" or "still" may hold a pause or a still picture on purpose. It writes a review
+export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
+a cartoon, a card) is picture: never a pause. On-screen text declared with `timeline onscreen`
+counts as the hook; a clip declared with `timeline card` is a designed card, not black. A rule
+broken on purpose needs an exception, granted in words (`studio exception`, QUALITY.md); check
+marks it `EXC` with its reason. It writes a review
 sheet next to the export, `exports/<name>.check/`: `cut-NN-….png` for the start, every cut and
 the end (12 frames, the waveform with speech in green, the words heard, a red line at the cut,
-1.5 s either side) and `contact.png` (24 frames of the whole export), plus `check.json`. It
-logs `check.done`, prints QUALITY.md's judgment rules as a checklist, and exits 1 if any hard
+1.5 s either side) and `contact.png` (24 frames of the whole export), plus `check.json` and
+`verdict.txt` (every rule, every exception with who and why). It logs `check.done` with the
+export's sha256 and every failure by rule and clip, prints QUALITY.md's judgment rules as a checklist, and exits 1 if any hard
 rule fails. The agent's loop (AGENTS.md): render, check, look at the sheet, fix and re-render
 up to three times, answer the judgment rules, and only then tell the operator.
+
+**Ready means checked.** An export is ready only when a check of its exact bytes passes, or every
+failure it found is covered by an exception still granted. `studio ready P [EXPORT]` exits 0 only
+then (it re-hashes the file, so bytes changed on disk are unchecked); a re-render starts
+unchecked; revoking an exception makes it not ready again. The UI's **Your videos** says
+"Ready", "Not ready: …" or "Not checked" (with **Check**), and lists the exceptions with
+**Revoke**.
+
+**Choices are logged.** Every pick is a `choice` event: the options in the order shown, the one
+chosen (or none), whether it was blind, and where each option came from (an export's bytes and
+story; a moment's or draft's agent, model and prompt version, which `step.moments` and
+`step.draft` now record). The UI logs a moment added to the story, and a post kept (Copy) or
+rewritten. `studio choose P CHOSEN --from A,B,C` logs one from the terminal; `studio ab P`
+sets up a blind A/B of versions (shuffled copies labelled A, B in `projects/P/blind/ROUND/`, the
+mapping in a `blind.round` event), and `studio choose P A --round ROUND` maps the pick back.
 
 Still measured by eye: captions clear of the platform's buttons, and fades are made by
 construction (not measured).

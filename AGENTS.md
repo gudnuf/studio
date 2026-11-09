@@ -56,6 +56,11 @@ studio timeline voice P CLIP|all natural|off     # natural is the default for sp
 studio words ID --fix WRONG RIGHT [--all]        # fix a misheard word (captions follow)
 studio render P                                  # export; it shows under "Your videos"
 studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
+studio ready P                                   # exit 0 only if these exact bytes passed a check
+studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length
+studio timeline onscreen P CLIP "TEXT"           # declare text drawn in the picture (a hook)
+studio timeline card P CLIP on|off               # a designed card: not "black picture"
+studio choose P CHOSEN --from A,B,C              # log a pick (preference data); ab P = blind A/B
 
 studio say "Trimmed clip 2 to start on 'privacy'." --re NOTE_ID
 ```
@@ -80,7 +85,33 @@ without replying. `studio log -n 20` shows the latest events from both of you.
    check again. Up to 3 rounds. Still failing: tell the operator what fails and what to shoot.
 4. Answer every judgment rule `check` lists, honestly, one line each. Any "no" sends the reel
    back, or kills it.
-5. Only then tell the operator it's done, with what check measured and your answers.
+5. Only then tell the operator it's done, with what check measured and your answers. "Ready" is
+   not yours to say: `studio ready P` says it, for the bytes that were checked. Re-render and
+   it's unchecked again.
+
+### Exceptions: when the rule is wrong for this reel
+
+A hard rule can fail on something that works: a 0.8 s punch, a held silence the picture carries,
+a silent cold open on action (≤ 1.5 s). You may grant the exception yourself when you can justify
+it: `studio exception grant P pauses CLIP --why "…"` (no CLIP = the whole reel). Bias toward
+trying. Write the why so the operator can judge it in one read: what the picture or the line does
+that the rule misses. Then check again; the exception shows as `EXC` with your reason, and you
+tell the operator which you granted. They may revoke it (`exception.revoked`, with their why);
+read those, they are how your taste gets tuned. Only `pauses`, `shortest`, `first word`,
+`picture` and `length` bend. A label word ("payoff", "hold") no longer exempts anything.
+
+On-screen text that is the hook (drawn or overlaid in the footage) counts for the first-word rule
+once declared: `timeline onscreen P CLIP "TEXT"`. A designed card (title on a plain ground) is
+declared with `timeline card P CLIP on`, so check doesn't call it black. A clip nobody speaks in is
+picture: its length is never counted as a pause.
+
+### Choices
+
+Every pick is preference data. When the operator picks between versions, moments or lines you
+offered, log it: `studio choose P CHOSEN --from A,B,C` (options in the order shown; `none` if they
+took none; `--action keep|rewrite`, `--note`). For versions, `studio ab P` makes a blind round
+(shuffled copies labelled A, B; the mapping goes in the log), then `studio choose P A --round R`.
+The UI logs its own picks (a moment into the story, a post kept or rewritten).
 
 ## Showing more: cover, pace, tighten
 
@@ -98,8 +129,7 @@ To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more 
 `timeline snap`, then `timeline tighten` (pauses over 0.35s inside speech down to 0.12s, cut in
 silence). Tightening only removes silence; it never joins words into something nobody said.
 
-A held shot or pause that is meant (a payoff, a reveal) is labelled so: a clip label with
-"payoff", "reveal", "hold" or "still" in it lets `check` pass its pause or still picture.
+A held shot or pause that is meant (a payoff, a reveal) gets an exception, with why (above).
 
 ## AI steps
 
