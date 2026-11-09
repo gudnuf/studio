@@ -9,6 +9,16 @@
       forDarwin = f: nixpkgs.lib.genAttrs darwin (s: f nixpkgs.legacyPackages.${s});
       fs = nixpkgs.lib.fileset;
 
+      # Silero VAD v6.2.0 in ggml form, for whisper-cli --vad and whisper-vad-speech-segments
+      # (speech edges, the hallucination gate, `studio check`). 885 KB, pinned to a commit of
+      # the repo whisper.cpp's models/download-vad-model.sh fetches from. studio.py finds it via
+      # STUDIO_VAD_MODEL; without nix it downloads the same file and checks the same sha256.
+      vadModelFor = pkgs: pkgs.fetchurl {
+        name = "ggml-silero-v6.2.0.bin";
+        url = "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin";
+        sha256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987";
+      };
+
       # The backend the desktop app runs: studio.py + server.py + ui/ + brands/ copied into the
       # store, run by a wrapper whose PATH starts with exact store paths of python3, ffmpeg-full
       # and whisper-cpp. The agent CLI (claude, codex, goose…) is the user's own: the app appends
@@ -18,13 +28,14 @@
           tools = [ pkgs.python3 pkgs.ffmpeg-full pkgs.whisper-cpp ];
           src = fs.toSource {
             root = ./.;
-            fileset = fs.unions [ ./studio.py ./server.py ./ui ./brands ./README.md ];
+            fileset = fs.unions [ ./studio.py ./server.py ./ui ./brands ./README.md ./QUALITY.md ];
           };
         in pkgs.runCommand "studio-backend" { nativeBuildInputs = [ pkgs.makeWrapper ]; } ''
           mkdir -p $out/share/studio $out/bin
           cp -r ${src}/. $out/share/studio/
           makeWrapper ${pkgs.python3}/bin/python3 $out/bin/studio-backend \
             --add-flags "-B $out/share/studio/studio.py" \
+            --set-default STUDIO_VAD_MODEL ${vadModelFor pkgs} \
             --prefix PATH : ${pkgs.lib.makeBinPath tools}
           # the CLI, same pinned tools (handy for `nix run .#studio -- ls`)
           ln -s studio-backend $out/bin/studio
@@ -108,6 +119,7 @@
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
               pkgs.rustc pkgs.cargo pkgs.cargo-tauri pkgs.rust-analyzer pkgs.clippy pkgs.rustfmt
             ];
+          STUDIO_VAD_MODEL = "${vadModelFor pkgs}";
           # rust-analyzer needs the std sources
           RUST_SRC_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin
             "${pkgs.rustPlatform.rustLibSrc}";
