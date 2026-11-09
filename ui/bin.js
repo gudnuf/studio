@@ -271,10 +271,35 @@ function renderExports() {
     el('div.export-list', {}, shown.map(x => el('div.export' + (x.file === freshExport ? '.fresh' : ''), {},
       el('div.ex-info', {},
         el('div.ex-name', { text: x.file.split('/').pop(), title: x.file }),
-        el('div.ex-meta', { text: `${timeAgo(x.ts)} · ${fmtDur(x.duration)} · ${x.aspect}${isAgent(x.actor) ? ' · by the agent' : ''}` })),
+        el('div.ex-meta', { text: `${timeAgo(x.ts)} · ${fmtDur(x.duration)} · ${x.aspect}${isAgent(x.actor) ? ' · by the agent' : ''}` }),
+        verdictLine(x)),
       el('button.btn.xs.ghost', { text: '▶', 'data-tip': 'Watch it', onclick: () => playExport(x) }),
       el('button.btn.xs.accent', { text: 'Copy post', 'data-tip': 'Open the post drafts for this video’s first clip, ready to copy', onclick: () => emit('postsForStory') }),
       el('button.btn.xs.ghost', { text: 'Finder', 'data-tip': 'Show the file in Finder (AirDrop it to your phone from there)', onclick: () => api.reveal(x.file).catch(e => toast(e.message)) })))));
+}
+/** Ready or not: only a passing check of these exact bytes says "ready"; every exception it
+ *  leans on is listed, with why, and the operator can revoke it here. */
+function verdictLine(x) {
+  const v = x.verdict || { state: 'unchecked' };
+  const head = v.state === 'ready' ? el('span.verdict.ready', { text: '✓ Ready', 'data-tip': `Checked ${timeAgo(v.checked)}: these exact bytes clear the bar` })
+    : v.state === 'failed' ? el('span.verdict.failed', { text: `Not ready: ${(v.failed || []).join(', ')}`, 'data-tip': 'The check found something to fix' })
+    : el('span.verdict.unchecked', { text: 'Not checked', 'data-tip': v.why || 'Run the check before posting' });
+  const check = v.state !== 'ready' && x.file === project()?.exports?.at(-1)?.file
+    ? el('button.btn.xs.ghost', { text: 'Check', 'data-tip': 'Measure it against the bar (QUALITY.md)', onclick: () => api.checkExport(S.slug).catch(e => toast(e.message, { kind: 'error' })) }) : null;
+  const exc = (v.excepted || []).map(e => el('div.verdict-exc', {},
+    el('span', { text: `Exception: ${e.rule} — ${e.why || ''}${isAgent(e.by) ? ' (the agent)' : ''}`, title: e.item }),
+    el('button.btn.xs.ghost', { text: 'Revoke', 'data-tip': 'Take this exception back: the check fails on it again', onclick: () => confirmRevoke(e) })));
+  return el('div.ex-verdict', {}, el('div', {}, head, check), ...exc);
+}
+function confirmRevoke(e) {
+  modal((card, close) => {
+    const why = el('input', { type: 'text', placeholder: 'Why not? (optional; it teaches the agent)', autofocus: true });
+    card.append(el('div.modal-head', {}, el('h2', { text: `Take back the ${e.rule} exception?` })),
+      el('p.hint', { text: `${isAgent(e.by) ? 'The agent' : 'It'} let this through: “${e.why || ''}” (${e.item}). Revoked, the check fails on it again and the video is not ready.` }),
+      why,
+      el('div.modal-actions', {}, el('button.btn', { text: 'Keep it', onclick: close }),
+        el('button.btn.primary', { text: 'Revoke', onclick: () => { close(); api.revokeException(S.slug, e.exception, why.value.trim()).catch(err => toast(err.message, { kind: 'error' })); } })));
+  });
 }
 /** A render just finished: show it at the top of the left pane. */
 export function showExport(file) {

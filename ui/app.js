@@ -464,11 +464,19 @@ async function boot() {
   on('exported', ev => {
     const x = { ...ev.data, ts: ev.ts };
     showExport(x.file);
-    native?.notify('Your video is ready', `“${project()?.name || 'Your project'}” is exported. Open Studio to post it.`);
-    toast('Your video is ready.', { kind: 'good', ms: 10000, actions: [
+    // exported is not ready: only a check of these exact bytes makes it ready
+    native?.notify('Your video is exported', `“${project()?.name || 'Your project'}” is exported. Check it before you post it.`);
+    toast('Your video is exported. Not checked yet.', { kind: 'good', ms: 10000, actions: [
+      { label: 'Check', run: () => api.checkExport(S.slug).catch(e => toast(e.message, { kind: 'error' })) },
       { label: 'Watch', run: () => playExport(x) },
       { label: 'Copy post', run: () => emit('postsForStory') },
       { label: 'Show in Finder', run: () => api.reveal(x.file) }] });
+  });
+  on('checked', ev => {
+    const d = ev.data || {};
+    const exc = (d.excepted || []).length;
+    if (d.ok) toast(`Ready: it clears the bar${exc ? ` (${exc} exception${exc > 1 ? 's' : ''}, listed under Your videos)` : ''}.`, { kind: 'good', ms: 7000 });
+    else toast(`Not ready: ${(d.failed || []).join(', ')} to fix.`, { kind: 'warn', ms: 7000 });
   });
   on('posted', () => { if (S.slug) localStorage.setItem('studio.posted.' + S.slug, '1'); renderSteps(); });
   renderHistory(); renderSave(); renderPlay(false);

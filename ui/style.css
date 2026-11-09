@@ -496,3 +496,10 @@ input.text { height: 34px; background: var(--bg); border: 1px solid var(--line-2
 .share-row input.text { flex: 1; min-width: 0; }
 .share-cli { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 10px; }
 .share-cli .cli-line { flex: 1; max-width: none; font-size: 12px; }
+.ex-verdict { font-size: 11px; margin-top: 2px; }
+.verdict { margin-right: 6px; }
+.verdict.ready { color: var(--good); }
+.verdict.failed { color: var(--warn, #e0a030); }
+.verdict.unchecked { color: var(--faint); }
+.verdict-exc { display: flex; align-items: center; gap: 4px; color: var(--faint); }
+.verdict-exc span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

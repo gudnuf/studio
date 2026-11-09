@@ -50,6 +50,13 @@ export const saveDraft = (mid, { key, field, n, text }) => req('POST', `/api/dra
 /** Fix a misheard word: just the word at `index`, or (all) every `wrong` in every file. */
 export const fixWord = (mid, { index, wrong, right, all }) => req('POST', `/api/words/${encodeURIComponent(mid)}/fix`, { index, wrong, right, all: !!all });
 
+/** Measure the latest export against the bar (QUALITY.md): only a passing check makes it ready. */
+export const checkExport = slug => req('POST', `/api/projects/${encodeURIComponent(slug)}/check`);
+/** Take back an exception to a hard rule (the agent's, usually); the log keeps why. */
+export const revokeException = (project, id, why) => req('POST', '/api/exceptions/revoke', { project, id, why });
+/** One pick, as preference data: the options in the order shown, and the one chosen (or null). */
+export const logChoice = c => req('POST', '/api/choice', c).catch(e => console.warn('choice not logged:', e.message));
+
 export const fileUrl = rel => '/files/' + rel.split('/').map(encodeURIComponent).join('/');
 
 /* ---- transcripts: fetched once per (media, transcript receipt) ---- */

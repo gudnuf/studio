@@ -6,7 +6,7 @@
 import { S, on, emit, commit, select, setPlayhead, gestureBegin, gesturePreview, gestureEnd,
   gestureCancel, mediaOf, total } from './store.js';
 import { layout, dur, trim, insert, MIN_CLIP, indexOf, splitAt, clipAt } from './ops.js';
-import { getTranscript } from './api.js';
+import { getTranscript, logChoice } from './api.js';
 import { transcriptStamp } from './player.js';
 import { player } from './player.js';
 import { $, el, clamp, fmtT, rafBatch, bsearch, fmtDur, toast } from './util.js';
@@ -444,6 +444,10 @@ export function addClip(p, idx = null) {
   const [tl, c] = insert(S.tl, idx, { media: p.media, in: a, out: b, ...(p.label ? { label: p.label } : {}),
     ...(p.moment != null ? { moment: +p.moment } : {}) });
   commit(tl, 'Add clip', { select: c.id });
+  if (p.moment != null && m.moments?.length && S.slug) {   // a pick among the agent's moments
+    logChoice({ project: S.slug, kind: 'moment', action: 'pick', shown: m.moments.map(x => `${m.id}@${x.n}`),
+      chosen: `${m.id}@${+p.moment}` });
+  }
   const i = indexOf(S.tl, c.id);
   setPlayhead(layout(S.tl).starts[i] + 0.0001, { from: 'add' });
   if (fitPending || layout(S.tl).total * zoom > scroll.clientWidth - 40) fit();

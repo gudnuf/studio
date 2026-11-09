@@ -605,15 +605,19 @@ function draftField(m, key, n, f, label, tip, limit, original) {
     api.saveDraft(mid, { key, field: f, n, text }).catch(e => toast('Couldn’t save your rewrite: ' + e.message, { kind: 'error' }));
   }, 500);
   const mark = () => { reset.hidden = edited.hidden = ta.value === original; };
+  // the post as the agent drafted it, kept as is or rewritten: one choice each time
+  const choice = action => S.slug && api.logChoice({ project: S.slug, kind: 'draft', action, shown: [`${mid}@${n}:${f}`],
+    chosen: `${mid}@${n}:${f}`, ...(action === 'rewrite' ? { text: ta.value } : {}),
+    options: { [`${mid}@${n}:${f}`]: { original } } });
   let dirtyField = false;
   ta.addEventListener('input', () => { dirtyField = true; localEdits.set(lk, ta.value === original ? null : ta.value); upd(); autoGrow(ta); mark(); push(); });
-  ta.addEventListener('blur', () => { if (dirtyField) { dirtyField = false; push.flush(); } });
+  ta.addEventListener('blur', () => { if (dirtyField) { dirtyField = false; push.flush(); if (ta.value !== original) choice('rewrite'); } });
   ta.addEventListener('keydown', e => e.stopPropagation());
   reset.onclick = () => { ta.value = original; localEdits.set(lk, null); mark(); upd(); autoGrow(ta); push.flush(); };
   upd();
   return el('div.dfield', {},
     el('div.dfield-head', {}, el('span.dlabel', { text: label, 'data-tip': tip }), edited, count, reset,
-      el('button.btn.xs', { text: 'Copy', onclick: () => { copyText(ta.value); emit('posted'); } })),
+      el('button.btn.xs', { text: 'Copy', onclick: () => { copyText(ta.value); emit('posted'); choice(ta.value === original ? 'keep' : 'rewrite'); } })),
     ta);
 }
 function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, 420) + 'px'; }
@@ -646,6 +650,10 @@ export function describe(ev) {
     case 'step.transcribe': return d.skipped ? `${m}: no sound — nothing to write out` : `wrote out ${plural(d.words ?? 0, 'word')} of ${m}`;
     case 'step.proxy': return d.skipped ? `${m}: audio only — no preview needed` : `made a preview of ${m}`;
     case 'step.speech': return d.skipped ? `${m}: no sound — no speech to find` : `found ${plural(d.regions ?? 0, 'stretch', 'stretches')} of speech in ${m}`;
+    case 'exception.granted': return `let “${pname(d.project)}” break the ${d.rule} rule${d.clip ? ' on one clip' : ''}: ${String(d.why || '').slice(0, 140)}`;
+    case 'exception.revoked': return `took back an exception (${d.rule}) in “${pname(d.project)}”${d.why ? `: ${String(d.why).slice(0, 140)}` : ''}`;
+    case 'choice': return `chose ${d.chosen ? `${d.kind} ${d.position + 1} of ${(d.shown || []).length}` : `none of ${(d.shown || []).length}`}${d.action !== 'pick' ? ` (${d.action})` : ''}${d.blind ? ' blind' : ''}`;
+    case 'blind.round': return `set up a blind A/B of ${Object.keys(d.labels || {}).length} versions of “${pname(d.project)}”`;
     case 'check.done': return d.ok ? `checked “${pname(d.project)}”: it clears the bar` : `checked “${pname(d.project)}”: ${(d.failed || []).join(', ')} to fix`;
     case 'step.keyframes': return d.skipped ? `${m}: audio only — no frames to grab` : `grabbed ${plural(d.frames ?? 0, 'frame')} from ${m}`;
     case 'step.moments': return `found ${plural(d.moments ?? 0, 'moment')} in ${m}`;

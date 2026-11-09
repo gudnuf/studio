@@ -67,6 +67,7 @@ function onEvent(ev) {
     emit('activity', ev);
   }
   if (ev.type === 'render.done' && d.project === S.slug) emit('exported', ev);
+  if (ev.type === 'check.done' && d.project === S.slug) emit('checked', ev);
   if (ev.type === 'transcript.edited' && ev.media) {   // a word was fixed (here or by the agent): refetch
     api.dropTranscript(ev.media);
     window.dispatchEvent(new CustomEvent('studio:transcript', { detail: ev.media }));
@@ -124,6 +125,7 @@ function uploadStatus(j) {
 const JOB_WORDS = {
   upload: j => `Preparing ${j.name || 'upload'} · ${uploadStatus(j).label}`,
   render: j => `Exporting ${j.project || ''}`,
+  check: j => `Checking ${j.project || ''} against the bar`,
   share: j => `Packing ${(j.projects || []).join(', ')} to share`,
   import: j => `Importing ${j.bundle || 'shared footage'}`,
   steps: j => {
