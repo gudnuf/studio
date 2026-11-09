@@ -1,5 +1,5 @@
 """The desktop studio's backend: a loopback-only HTTP server over the same library and event
-log the CLI uses. Every change the UI makes is an event, so Claude (via the CLI) and the
+log the CLI uses. Every change the UI makes is an event, so the agent (via the CLI) and the
 operator (via the UI) always see one state. Stdlib only."""
 import atexit, json, mimetypes, os, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -306,7 +306,7 @@ class H(BaseHTTPRequestHandler):
         base = parse_qs(urlparse(self.path).query).get("base", [None])[0]
         with _save_lock:
             # ?base=<rev the client edited from>: refuse a save that would silently overwrite
-            # an edit (usually Claude's, via the CLI) the client hasn't seen. No base means 0
+            # an edit (usually the agent's, via the CLI) the client hasn't seen. No base means 0
             # (a client that never saw a save): it can only write a story nobody has saved yet.
             # The check runs inside timeline_save's file lock, so a CLI save can't slip between.
             try:
@@ -372,7 +372,7 @@ class H(BaseHTTPRequestHandler):
                             focus=b.get("focus"), actor="operator", id=S.clip_id())
                 return self.send_json(ev)
             if (m := re.match(r"^/api/drafts/([0-9a-f]{6,64})$", path)):
-                # the operator's rewrite of a post draft: into the log, so Claude can read it
+                # the operator's rewrite of a post draft: into the log, so the agent can read it
                 b = self.body_json()
                 mid = m.group(1)
                 if mid not in S.library():
@@ -614,10 +614,12 @@ def import_job(path):
 def health():
     """What the desktop app checks before attaching to a running server, and what the UI
     reads to say plainly when a tool or the speech model is missing."""
-    tools = {t: shutil.which(t) for t in ("ffmpeg", "ffprobe", "whisper-cli", "claude")}
+    tools = {t: shutil.which(t) for t in ("ffmpeg", "ffprobe", "whisper-cli")}
+    agent = S.agent_info()
+    tools["agent"] = agent["path"]
     return {"ok": True, "app": "studio", "pid": os.getpid(), "port": _port,
             "home": str(S.HOME.resolve()), "owner": _home_lock is not None,
-            "tools": tools, "model": {"path": str(S.MODEL), "exists": S.MODEL.exists()}}
+            "tools": tools, "agent": agent, "model": {"path": str(S.MODEL), "exists": S.MODEL.exists()}}
 
 def lock_path():
     return S.HOME / ".server.json"
@@ -642,7 +644,7 @@ def remove_lock():
 
 def _quit(*_):
     """Leave nothing behind: the lockfile goes, and (when the app started us as a process
-    group) the ffmpeg/whisper/claude children go with us."""
+    group) the ffmpeg/whisper/agent children go with us."""
     remove_lock()
     if os.environ.get("STUDIO_PARENT_PID") and os.getpgid(0) == os.getpid():
         # (runs on a watcher thread, where signal.signal() isn't allowed; the TERM this sends

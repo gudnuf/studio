@@ -68,12 +68,12 @@ fn open_library(app: AppHandle, home: PathBuf) {
                 splash(&app, "status", &["Opening your studio…", "Finding your tools…"]);
                 let login = backend::login_path();
                 if login.is_none() {
-                    log("couldn't read the login shell's PATH; `claude` may not be found");
+                    log("couldn't read the login shell's PATH; the agent CLI may not be found");
                 }
                 *p = backend::merged_path(login.as_deref());
-                match backend::which(&p, "claude") {
-                    Some(c) => log(&format!("claude: {}", c.display())),
-                    None => log("claude: not found on the login PATH (Find moments won't work)"),
+                match backend::find_agent(&p) {
+                    (a, Some(c)) => log(&format!("agent {a}: {}", c.display())),
+                    (a, None) => log(&format!("agent {a}: not found on the login PATH (Find moments won't work)")),
                 }
             }
             p.clone()
@@ -269,6 +269,7 @@ fn app_info(app: AppHandle) -> serde_json::Value {
     let st = app.state::<AppState>();
     let b = st.backend.lock().unwrap();
     let path = st.path.lock().unwrap().clone();
+    let (agent, agent_path) = backend::find_agent(&path);
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "home": b.as_ref().map(|b| b.home.clone()),
@@ -276,7 +277,7 @@ fn app_info(app: AppHandle) -> serde_json::Value {
         "attached": b.as_ref().map(|b| b.attached),
         "server_pid": b.as_ref().and_then(|b| b.child.as_ref().map(|c| c.id())),
         "server": b.as_ref().map(|b| b.health.clone()),
-        "claude": backend::which(&path, "claude"),
+        "agent": {"name": agent, "path": agent_path},
         "logs": backend::log_dir(),
     })
 }

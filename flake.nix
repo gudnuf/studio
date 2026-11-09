@@ -11,7 +11,8 @@
 
       # The backend the desktop app runs: studio.py + server.py + ui/ + brands/ copied into the
       # store, run by a wrapper whose PATH starts with exact store paths of python3, ffmpeg-full
-      # and whisper-cpp. `claude` isn't in nixpkgs: the app appends the user's login-shell PATH.
+      # and whisper-cpp. The agent CLI (claude, codex, goose…) is the user's own: the app appends
+      # their login-shell PATH.
       backendFor = pkgs:
         let
           tools = [ pkgs.python3 pkgs.ffmpeg-full pkgs.whisper-cpp ];

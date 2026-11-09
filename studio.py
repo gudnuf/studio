@@ -5,7 +5,7 @@
   studio run   [-p project] [--brand jefe] [files...]   ingest inbox (or files), run every step
   studio ingest [-p project] [files...]    move footage from inbox/ into the library
   studio proxy|transcribe|keyframes|moments|cut|draft ID... | --all [--force]   run one step
-                                           (moments/draft/cut spend Claude subscription)
+                                           (moments and draft call your agent: see below)
   studio media show ID                     one file: steps, moments (n, times, title, hook)
   studio words ID [--from T --to T] [--grep WORD]   transcript words with timings
   studio words ID --fix WRONG RIGHT | --fix WRONG RIGHT --all   fix a misheard word
@@ -29,11 +29,14 @@
                                            every file first; importing twice changes nothing)
   studio ls [-p project]                   library status
   studio log [-n N]                        tail the event log
+  studio agent                             which agent moments/draft call, and how
 
-Home is $STUDIO_HOME (default ~/Studio). Needs ffmpeg, whisper-cli and claude on PATH
-(`nix develop` in this directory provides the first two).
+Home is $STUDIO_HOME (default ~/Studio). Needs ffmpeg and whisper-cli on PATH (`nix develop`
+in this directory provides them) and, for moments and draft, a coding agent's CLI:
+STUDIO_AGENT=claude|codex|goose (default: the first of those on PATH), or STUDIO_AGENT_CMD
+for any other command that reads a prompt on stdin and prints the reply.
 """
-import argparse, bisect, copy, ctypes, datetime, errno, hashlib, html, json, math, os, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, bisect, copy, ctypes, datetime, errno, hashlib, html, json, math, os, re, shlex, shutil, subprocess, sys, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,14 +44,10 @@ HOME = Path(os.environ.get("STUDIO_HOME", Path.home() / "Studio"))
 HERE = Path(__file__).resolve().parent
 MODEL = Path(os.environ.get("STUDIO_WHISPER_MODEL",
              Path.home() / ".local/share/studio/models/ggml-large-v3-turbo.bin"))
-CLAUDE_MODEL = os.environ.get("STUDIO_CLAUDE_MODEL")  # unset = subscription default
-# Moment picking runs on Opus (operator's call, 2026-11-08); drafts are rewritten by the
-# operator anyway and stay on the default. STUDIO_MOMENTS_MODEL="" falls back to the default.
-MOMENTS_MODEL = os.environ.get("STUDIO_MOMENTS_MODEL", "claude-opus-5-5")
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".webm", ".avi"}
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac", ".caf", ".ogg", ".flac"}
 LOCAL_STEPS = ["proxy", "transcribe", "keyframes"]       # cheap, on-device, run at ingest
-AI_STEPS = ["moments", "cut", "draft"]                    # spend subscription, run on request
+AI_STEPS = ["moments", "cut", "draft"]                    # call the agent, run on request
 STEPS = LOCAL_STEPS + AI_STEPS
 ASPECTS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080), "4:5": (1080, 1350)}
 DEFAULT_PROJECT = "inbox"
@@ -326,17 +325,95 @@ def fmt_t(t):
     t = max(0.0, float(t))
     return f"{int(t // 60)}:{t % 60:04.1f}"
 
-def claude(prompt, cwd, allow_read=False, model=None):
-    need("claude")
-    cmd = ["claude", "-p", prompt, "--output-format", "json"]
-    if model or CLAUDE_MODEL:
-        cmd += ["--model", model or CLAUDE_MODEL]
-    if allow_read:
-        cmd += ["--allowedTools", "Read"]
-    out = json.loads(sh(cmd, cwd=cwd))
-    if out.get("is_error"):
-        raise RuntimeError(f"claude: {out.get('result')}")
-    return out["result"]
+# ---------- the agent ---------------------------------------------------------
+# moments and draft hand one prompt to a coding agent's non-interactive mode, run in the
+# media's folder (so it can open keyframes/ and transcript.txt), and parse the JSON block out
+# of its reply. Any agent will do:
+#   STUDIO_AGENT_CMD      any command: the prompt on stdin, the reply on stdout (the model,
+#                         if one is set, in $STUDIO_AGENT_MODEL). Wins over STUDIO_AGENT.
+#   STUDIO_AGENT          claude | codex | goose (built in, see agent_cmd); unset = the first
+#                         of those on PATH
+#   STUDIO_AGENT_MODEL    model for every call; unset = the agent's own default
+#   STUDIO_MOMENTS_MODEL  model for picking moments; unset = MOMENTS_MODEL below for that
+#                         agent, "" = no override (STUDIO_AGENT_MODEL or the agent's default)
+# Drafts are rewritten by the operator anyway and stay on the default model.
+
+AGENTS = ("claude", "codex", "goose")
+# With Claude Code, moment picking runs on Opus (operator's call, 2026-11-08).
+MOMENTS_MODEL = {"claude": "claude-opus-5-5"}
+
+def agent_name():
+    """Which agent the AI steps call: "custom" (STUDIO_AGENT_CMD) or a built-in."""
+    if os.environ.get("STUDIO_AGENT_CMD", "").strip():
+        return "custom"
+    a = os.environ.get("STUDIO_AGENT", "").strip().lower()
+    if a and a not in AGENTS:
+        raise RuntimeError(f"STUDIO_AGENT={a}: the built-in agents are {', '.join(AGENTS)}; "
+                           "for any other, set STUDIO_AGENT_CMD to a command that reads the "
+                           "prompt on stdin and prints the reply")
+    return a or next((x for x in AGENTS if shutil.which(x)), AGENTS[0])
+
+def agent_model(name, model=None):
+    """model, else STUDIO_AGENT_MODEL (STUDIO_CLAUDE_MODEL, its old name, for claude), else
+    None: the agent's own default."""
+    return model or os.environ.get("STUDIO_AGENT_MODEL") or \
+        (os.environ.get("STUDIO_CLAUDE_MODEL") if name == "claude" else None) or None
+
+def moments_model(name):
+    return os.environ.get("STUDIO_MOMENTS_MODEL", MOMENTS_MODEL.get(name))
+
+def agent_cmd(name, model=None, allow_read=False, out=None):
+    """The command line for one call. The prompt always goes on stdin (a transcript can be
+    longer than an argument may be). out: where codex writes its last message."""
+    if name == "custom":
+        return shlex.split(os.environ["STUDIO_AGENT_CMD"])
+    if name == "claude":   # Claude Code: JSON {"result", "is_error"} on stdout
+        return ["claude", "-p", "--output-format", "json"] + (["--model", model] if model else []) \
+            + (["--allowedTools", "Read"] if allow_read else [])
+    if name == "codex":    # Codex: `exec` is the non-interactive entry; "-" = prompt on stdin
+        return ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral",
+                "--color", "never"] + (["-m", model] if model else []) + ["-o", str(out), "-"]
+    if name == "goose":    # Goose: the session's messages as JSON on stdout
+        return ["goose", "run", "--no-session", "--quiet", "--output-format", "json"] \
+            + (["--model", model] if model else []) + ["-i", "-"]
+    raise RuntimeError(f"no agent {name}")
+
+def agent_info():
+    """For `studio agent` and the UI's health check: which agent, where it is, which models."""
+    try:
+        name = agent_name()
+    except RuntimeError as e:
+        return {"name": None, "path": None, "error": str(e)}
+    exe = (agent_cmd(name) or [""])[0] if name == "custom" else name
+    return {"name": name, "path": shutil.which(exe) if exe else None, "command": exe,
+            "model": agent_model(name), "moments_model": agent_model(name, moments_model(name))}
+
+def agent(prompt, cwd, allow_read=False, model=None):
+    """One prompt to the agent; its reply, as text."""
+    name = agent_name()
+    model = agent_model(name, model)
+    with tempfile.TemporaryDirectory(prefix="studio-agent-") as t:
+        out = Path(t) / "reply.txt"
+        cmd = agent_cmd(name, model, allow_read, out)
+        if not cmd or not shutil.which(cmd[0]):
+            raise RuntimeError(f"`{cmd[0] if cmd else ''}` not on PATH: install it, or point "
+                               "STUDIO_AGENT / STUDIO_AGENT_CMD at an agent you have (`studio agent`)")
+        env = {**os.environ, **({"STUDIO_AGENT_MODEL": model} if model else {})}
+        text = sh(cmd, cwd=cwd, input=prompt, env=env)
+        if name == "claude":
+            res = json.loads(text)
+            if res.get("is_error"):
+                raise RuntimeError(f"claude: {res.get('result')}")
+            return res["result"]
+        if name == "codex":
+            text = out.read_text() if out.exists() else ""
+        elif name == "goose":
+            said = [m for m in json.loads(text).get("messages", []) if m.get("role") == "assistant"]
+            text = "".join(c.get("text", "") for c in (said[-1]["content"] if said else [])
+                           if c.get("type") == "text")
+        if not text.strip():
+            raise RuntimeError(f"{name}: no reply")
+        return text
 
 def parse_json_block(text):
     m = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
@@ -1254,7 +1331,7 @@ FOOTAGE: "{name}" — {kind}, {dur} long, {orient}.
 TRANSCRIPT (timestamped segments; may be empty for silent screen recordings):
 {transcript}
 
-KEYFRAMES: one every {every}s, listed in {kf_index}. Read a handful of them (the Read tool) to
+KEYFRAMES: one every {every}s, listed in {kf_index}. Open a handful of the images to
 see what is on screen — more if the footage is silent.
 
 Find 3-8 MOMENTS worth cutting into short vertical clips (15-75s each; shorter is fine if the
@@ -1282,7 +1359,7 @@ def moments(item):
         brand=brand_text(item), name=item["name"], kind=kind, dur=fmt_t(item["duration"]),
         orient=orient, transcript=transcript, every=kf.get("every", "?"),
         kf_index="keyframes/index.json" if kf.get("frames") else "(no keyframes)")
-    ms = parse_json_block(claude(prompt, cwd=d, allow_read=True, model=MOMENTS_MODEL))
+    ms = parse_json_block(agent(prompt, cwd=d, allow_read=True, model=moments_model(agent_name())))
     dur = item["duration"]
     clean = []
     for m in ms:
@@ -1484,8 +1561,8 @@ def draft(item):
         said = " ".join(w["w"] for w in words if m["start"] <= w["start"] < m["end"])
         lines.append(f"#{m['n']} [{fmt_t(m['start'])}-{fmt_t(m['end'])}] {m['title']} — "
                      f"hook: {m['hook']} — why: {m['why']}\n    said: {said or '(silent)'}")
-    result = claude(DRAFT_PROMPT.format(brand=brand_text(item), name=item["name"],
-                                        moments="\n".join(lines)), cwd=d, allow_read=True)
+    result = agent(DRAFT_PROMPT.format(brand=brand_text(item), name=item["name"],
+                                       moments="\n".join(lines)), cwd=d, allow_read=True)
     drafts = parse_json_block(result)
     out = d / "drafts.json"
     out.write_text(json.dumps(drafts, indent=1))
@@ -1534,7 +1611,7 @@ def _run_one(step, mid, force, quiet):
 # holds up a proxy for a file that was just dropped in:
 #   media   ffmpeg / VideoToolbox (proxy, keyframes, cut)   STUDIO_MEDIA_LANE (2)
 #   whisper Metal GPU, one at a time (transcribe)            1
-#   ai      claude -p calls (moments, draft)                 STUDIO_AI_LANE (3)
+#   ai      agent calls (moments, draft)                     STUDIO_AI_LANE (3)
 # Per file: proxy -> keyframes runs alongside transcribe; moments waits for both; then cut
 # and draft run side by side.
 
@@ -2370,8 +2447,24 @@ button{{font:600 10px ui-monospace,monospace;border:1px solid #DAD5C6;background
 
 # ---------- cli -------------------------------------------------------------
 
+# Who is at the CLI: the agent, or a person in a terminal ("cli"). Agents mark the shells
+# they run commands in: Claude Code sets CLAUDECODE, Codex CODEX_THREAD_ID (and CODEX_SANDBOX
+# when sandboxed), Goose GOOSE_TERMINAL. Any other agent: STUDIO_ACTOR=agent (or =cli to say
+# it's you). The agent's events say actor "agent"; libraries from before say "claude", and
+# everything that reads the log takes any actor but "operator" and "cli" to be the agent.
+AGENT_MARKERS = ("CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX", "GOOSE_TERMINAL")
+
+def by_agent():
+    who = os.environ.get("STUDIO_ACTOR", "").strip().lower()
+    if who:
+        return who != "cli"
+    return any(os.environ.get(k) for k in AGENT_MARKERS)
+
 def actor_now():
-    return "claude" if os.environ.get("CLAUDECODE") else "cli"
+    return "agent" if by_agent() else "cli"
+
+def is_agent(actor):
+    return bool(actor) and actor not in ("operator", "cli")
 
 def clip_index(clips, x):
     """A clip by number (1-based, as `timeline show` prints and the UI says "Clip 3 of 4";
@@ -2533,7 +2626,7 @@ def cmd_timeline(a):
 
 def note_line(n):
     """One note, plus what the operator had selected when they wrote it."""
-    who = {"operator": "operator", "claude": "claude"}.get(n.get("actor"), n.get("actor") or "?")
+    who = "agent" if is_agent(n.get("actor")) else n.get("actor") or "?"
     seen = "  ✓seen" if n.get("acked") else ""
     out = [f"{n['ts']}  {n['id']}  [{n.get('project') or '-'}]  {who}: {n['text']}{seen}"]
     if n.get("re"):
@@ -2609,10 +2702,10 @@ def cmd_notes(a):
     if notes:
         last = mark.read_text().strip() if mark.exists() else ""
         mark.write_text(max([last] + [n["ts"] for n in notes]))
-        # reading a note is seeing it: the operator gets a "Claude saw this" tick
+        # reading a note is seeing it: the operator gets an "agent saw this" tick
         fresh = [n["id"] for n in notes if n.get("actor") == "operator" and not n.get("acked")]
-        if fresh and os.environ.get("CLAUDECODE"):
-            emit("note.ack", None, ids=fresh, actor="claude")
+        if fresh and by_agent():
+            emit("note.ack", None, ids=fresh, actor="agent")
 
 def media_resolve(st, x):
     hits = [m for m in st["media"] if m.startswith(x)] or \
@@ -2815,7 +2908,7 @@ def main():
     p.add_argument("--json", action="store_true"); p.add_argument("--since", metavar="TS")
     p.add_argument("--unread", action="store_true", help="only notes newer than the last read")
     p.add_argument("--ack", nargs="+", metavar="ID", help="mark notes seen (the operator gets a tick)")
-    p = sub.add_parser("say", help="reply to the operator in the UI's Tell Claude tab")
+    p = sub.add_parser("say", help="reply to the operator in the UI's Tell the agent tab")
     p.add_argument("text"); p.add_argument("-p", "--project"); p.add_argument("--re", metavar="NOTE_ID")
     p = sub.add_parser("media"); p.add_argument("action", choices=["show"]); p.add_argument("id")
     p = sub.add_parser("posts"); p.add_argument("id"); p.add_argument("--json", action="store_true")
@@ -2839,6 +2932,7 @@ def main():
                    help="don't make previews now (the studio makes them when it next starts)")
     p = sub.add_parser("ls"); p.add_argument("-p", "--project")
     p = sub.add_parser("log"); p.add_argument("-n", type=int, default=20)
+    sub.add_parser("agent", help="which agent moments/draft call, and the command line")
     a = ap.parse_args()
 
     for sub_dir in ("inbox", "media", "projects"):
@@ -2865,7 +2959,7 @@ def main():
     elif a.cmd in STEPS:
         if not a.ids and not a.all:
             sys.exit(f"studio {a.cmd}: pass media ids, or --all for every file missing it"
-                     + (" (this spends Claude subscription)" if a.cmd in AI_STEPS else "")
+                     + (" (this calls your agent for each one)" if a.cmd in AI_STEPS else "")
                      + ". To read results: studio media show ID / studio posts ID / studio words ID")
         ids = a.ids
         if a.all:
@@ -2897,7 +2991,7 @@ def main():
             proj = proj or n.get("project")
             if n.get("actor") == "operator" and not n.get("acked"):
                 emit("note.ack", None, ids=[n["id"]], actor=actor_now())
-        ev = emit("note", None, text=a.text.strip(), project=proj, actor="claude",
+        ev = emit("note", None, text=a.text.strip(), project=proj, actor="agent",
                   id=clip_id(), **({"re": a.re} if a.re else {}))
         print(f"said ({ev['data']['id']})")
     elif a.cmd == "media":
@@ -2930,6 +3024,17 @@ def main():
     elif a.cmd == "log":
         for ev in tail_events(a.n, skip=("job.progress",)):
             print(ev["ts"], ev["type"], ev["media"] or "-", json.dumps(ev["data"])[:120])
+    elif a.cmd == "agent":
+        info = agent_info()
+        if not info["name"]:
+            sys.exit(info["error"])
+        print(f"agent    {info['name']}  ({info['path'] or info['command'] + ' not on PATH'})")
+        print(f"command  {shlex.join(agent_cmd(info['name'], info['model'], True, 'REPLY_FILE'))}"
+              "  < prompt")
+        print(f"model    {info['model'] or '(the agent default)'};  moments: "
+              f"{info['moments_model'] or '(the agent default)'}")
+        print(f"you are  {actor_now()}" + ("" if by_agent() else
+              "  (an agent driving the CLI: set STUDIO_ACTOR=agent if it isn't detected)"))
 
 if __name__ == "__main__":
     sys.path.insert(0, str(HERE))

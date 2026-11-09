@@ -26,7 +26,7 @@ impl Backend {
     }
 
     /// Stop the server only if we started it: close its stdin (it exits on EOF and takes its
-    /// ffmpeg/whisper/claude children with it), then TERM the process group, then KILL.
+    /// ffmpeg/whisper/agent children with it), then TERM the process group, then KILL.
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else { return };
         let pid = child.id();
@@ -121,7 +121,8 @@ fn backend_command() -> (String, Vec<String>) {
 }
 
 /// The user's login-shell PATH. A Dock launch gets launchd's bare PATH
-/// (/usr/bin:/bin:/usr/sbin:/sbin), which has no `claude`; the shell knows where it is.
+/// (/usr/bin:/bin:/usr/sbin:/sbin), which has no agent CLI (`claude`, `codex`, `goose`…); the
+/// shell knows where it is.
 pub fn login_path() -> Option<String> {
     let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
     let mut child = Command::new(&shell)
@@ -141,7 +142,7 @@ pub fn login_path() -> Option<String> {
     out.lines().find_map(|l| l.strip_prefix("__STUDIO_PATH__")).map(str::to_string)
 }
 
-/// Our own PATH first (so a test can put a fake `claude` in front), then the login shell's.
+/// Our own PATH first (so a test can put a fake agent in front), then the login shell's.
 /// The wrapper then puts the pinned python3/ffmpeg/whisper-cli in front of all of it.
 pub fn merged_path(login: Option<&str>) -> String {
     let own = std::env::var("PATH").unwrap_or_default();
@@ -163,6 +164,21 @@ pub fn which(path: &str, tool: &str) -> Option<PathBuf> {
     path.split(':').map(|d| Path::new(d).join(tool)).find(|p| {
         fs::metadata(p).map(|m| m.is_file() && std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0).unwrap_or(false)
     })
+}
+
+/// The coding agents studio.py has built in, in the order it picks the first one found.
+pub const AGENTS: [&str; 3] = ["claude", "codex", "goose"];
+
+/// The agent CLI that "Find moments" will run, as studio.py chooses it: STUDIO_AGENT_CMD's
+/// program, else STUDIO_AGENT, else the first of AGENTS on `path`. (name, where it is)
+pub fn find_agent(path: &str) -> (String, Option<PathBuf>) {
+    let var = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let name = var("STUDIO_AGENT_CMD").and_then(|c| c.split_whitespace().next().map(str::to_string))
+        .or_else(|| var("STUDIO_AGENT").map(|a| a.to_lowercase()))
+        .or_else(|| AGENTS.iter().find(|a| which(path, a).is_some()).map(|a| a.to_string()))
+        .unwrap_or_else(|| AGENTS[0].to_string());
+    let found = if name.contains('/') { Some(PathBuf::from(&name)).filter(|p| p.is_file()) } else { which(path, &name) };
+    (name, found)
 }
 
 pub fn log_dir() -> PathBuf {
@@ -216,7 +232,12 @@ pub fn attach_or_start(home: &Path, path: &str) -> Result<Backend, (String, Stri
             .env("STUDIO_HOME", home)
             .env("STUDIO_PARENT_PID", std::process::id().to_string())
             .env("PATH", path)
+            // the app's server acts for the operator, never as an agent (see studio.py actor_now)
             .env_remove("CLAUDECODE")
+            .env_remove("CODEX_THREAD_ID")
+            .env_remove("CODEX_SANDBOX")
+            .env_remove("GOOSE_TERMINAL")
+            .env_remove("STUDIO_ACTOR")
             .stdin(Stdio::piped())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
