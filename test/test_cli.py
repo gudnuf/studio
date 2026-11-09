@@ -1320,6 +1320,282 @@ class Quality(unittest.TestCase):
         self.assertEqual(r["cuts"]["status"], "pass", "no speech: nothing to cut into")
 
 
+
+@unittest.skipUnless(H.have_tools(*NEEDS, "whisper-vad-speech-segments"),
+                     "needs ffmpeg/whisper-cli/whisper-vad-speech-segments (run in nix develop)")
+class Cover(unittest.TestCase):
+    """B-roll over a clip's sound (cover), the voice treatment, pace and pause tightening, on
+    the quality fixtures: bursts.mov (three sentences, known silences) is the talking clip,
+    broll-roomtone.mov (moving picture, nobody talking) the b-roll."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fx = H.fixtures()
+        cls.known = json.loads((cls.fx / "bursts.json").read_text())
+        cls.home = H.new_home("cover")
+        H.cli(cls.home, "ingest", "-p", "q", cls.fx / "bursts.mov", cls.fx / "broll-roomtone.mov",
+              cls.fx / "screen-recording.mp4")
+        cls.S = H.import_studio(cls.home)
+        ids = {it["name"]: m for m, it in cls.S.state()["media"].items()}
+        cls.b, cls.r = ids["bursts.mov"], ids["broll-roomtone.mov"]
+        cls.scr = ids["screen-recording.mp4"]    # a picture unlike the talking fixture's
+
+    def setUp(self):
+        self.S.HOME = self.home
+
+    def project(self, name, a=0.5, b=8.4, captions="on", media=None, snap=True):
+        slug = H.cli(self.home, "project", "new", name).stdout.strip().splitlines()[-1]
+        H.cli(self.home, "timeline", "add", slug, media or self.b, a, b, *(["--snap"] if snap else []))
+        H.cli(self.home, "timeline", "show", slug, "--captions", captions)
+        return slug
+
+    def tl(self, slug):
+        return self.S.state()["projects"][slug]["timeline"]
+
+    def render(self, slug):
+        H.cli(self.home, "render", slug, timeout=900)
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]
+        return self.home / ev["data"]["file"], ev["data"]
+
+    def check(self, slug):
+        r = H.cli(self.home, "check", slug, "--json", check=False, timeout=900)
+        self.assertIn(r.returncode, (0, 1), r.stderr[-2000:])
+        res = json.loads(r.stdout)
+        return res, {x["rule"]: x for x in res["rules"]}
+
+    def pcm(self, path):
+        import array, subprocess
+        raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-ac", "1",
+                              "-ar", "16000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
+        return array.array("h", raw[:len(raw) // 2 * 2])
+
+    def frame(self, path, t):
+        import subprocess
+        return subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path),
+                               "-frames:v", "1", "-vf", "scale=54:96", "-pix_fmt", "gray", "-f", "rawvideo", "-"],
+                              capture_output=True, check=True).stdout
+
+    @staticmethod
+    def diff(x, y):
+        return sum(abs(p - q) for p, q in zip(x, y)) / max(1, min(len(x), len(y)))
+
+    def sound_diff(self, x, y):
+        """RMS of the difference over RMS of the signal (0 = the same sound)."""
+        n = min(len(x), len(y))
+        num = sum((x[i] - y[i]) ** 2 for i in range(0, n, 4))
+        den = sum(x[i] ** 2 for i in range(0, n, 4)) or 1
+        return (num / den) ** 0.5
+
+    # ---- cover ----
+    def test_cover_changes_the_picture_not_the_sound(self):
+        plain = self.project("Plain", captions="off")
+        covered = self.project("Covered", captions="off")
+        roll = self.project("Roll", 1.0, 4.0, captions="off", media=self.scr, snap=False)
+        clip = self.tl(covered)["clips"][0]
+        H.cli(self.home, "timeline", "cover", covered, clip["id"], "--with", self.scr, 1.0, 4.0, "--at", 2.0)
+        c = self.tl(covered)["clips"][0]
+        self.assertEqual(c["cover"], [{"media": self.scr, "in": 1.0, "out": 4.0, "at": round(clip["in"] + 2.0, 3)}])
+        self.assertIn("cover 1: 2.0–5.0s", H.cli(self.home, "timeline", "show", covered).stdout)
+        fp, ev = self.render(covered)
+        f0, _ = self.render(plain)
+        fr, _ = self.render(roll)
+        self.assertAlmostEqual(H.ffprobe(fp)["duration"], H.ffprobe(f0)["duration"], delta=0.1)
+        self.assertEqual(ev["concat"], "copy", "a covered part joins the others losslessly")
+        # the sound is the clip's own, untouched by what's over it
+        self.assertLess(self.sound_diff(self.pcm(f0), self.pcm(fp)), 0.02)
+        # the picture: the clip's own outside 2-5s, the b-roll inside it, starting where asked
+        for t in (0.5, 1.5, 5.6, 7.0):
+            self.assertLess(self.diff(self.frame(fp, t), self.frame(f0, t)), 4, f"own picture at {t}")
+        for t in (2.3, 3.5, 4.7):
+            own, broll = self.frame(f0, t), self.frame(fr, t - 2.0)
+            self.assertGreater(self.diff(own, broll), 8, "fixtures too alike to tell apart")
+            self.assertLess(self.diff(self.frame(fp, t), broll), 4, f"b-roll at {t}")
+        self.assertEqual([(x["kind"], x["at"]) for x in ev["cuts"]], [("picture", 2.0), ("picture", 5.0)])
+
+    def test_check_judges_speech_cuts_not_picture_cuts(self):
+        slug = self.project("Check cover")
+        c = self.tl(slug)["clips"][0]
+        regs = self.known["speech"]
+        # both ends of the piece land mid-sentence: fine for the picture, the sound runs on
+        at = (regs[0][0] + regs[0][1]) / 2 - c["in"]
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 0.5, 3.5, "--at", round(at, 2))
+        self.render(slug)
+        res, r = self.check(slug)
+        self.assertEqual(r["cuts"]["status"], "pass", r["cuts"])
+        self.assertIn("2 picture-only cuts", r["cuts"]["detail"])
+        self.assertEqual(r["captions"]["status"], "pass", "captions come from the sound, not the b-roll")
+        self.assertEqual(sorted(x["kind"] for x in res["cuts"]), ["picture", "picture"])
+        self.assertEqual(len([i for i in res["images"] if i.startswith("cut-")]), 4, "start, 2 picture cuts, end")
+        self.assertTrue(any("True" in j and "show" in j.lower() for j in res["judgment"]),
+                        "the truth rule is among the judgment questions")
+
+    def test_cover_ops_overlap_split_uncover_and_undo(self):
+        slug = self.project("Ops", captions="off")
+        cid = self.tl(slug)["clips"][0]["id"]
+        rev0 = self.S.state()["projects"][slug]["rev"]
+        before = self.tl(slug)
+        H.cli(self.home, "timeline", "cover", slug, cid, "--with", self.r, 1.0, 4.0, "--at", 1.0,
+              "--base", rev0)
+        H.cli(self.home, "timeline", "cover", slug, cid, "--with", self.r, 6.0, 7.0, "--at", 2.0)
+        cov = self.tl(slug)["clips"][0]["cover"]
+        a = self.tl(slug)["clips"][0]["in"]
+        # the new piece cuts a hole in the one it lands on: 1-2 old, 2-3 new, 3-4 old (going on)
+        self.assertEqual([(p["in"], p["out"], round(p["at"] - a, 3)) for p in cov],
+                         [(1.0, 2.0, 1.0), (6.0, 7.0, 2.0), (3.0, 4.0, 3.0)])
+        # stale base refused like every other edit
+        r = H.cli(self.home, "timeline", "uncover", slug, cid, "1", "--base", rev0, check=False)
+        self.assertEqual(r.returncode, 3)
+        # a split gives each side the cover over its own words
+        H.cli(self.home, "timeline", "split", slug, cid, 2.5)
+        left, right = self.tl(slug)["clips"]
+        self.assertEqual([(p["in"], p["out"]) for p in left["cover"]], [(1.0, 2.0), (6.0, 6.5)])
+        self.assertEqual([(p["in"], p["out"]) for p in right["cover"]], [(6.5, 7.0), (3.0, 4.0)])
+        H.cli(self.home, "timeline", "uncover", slug, right["id"], "2")
+        self.assertEqual(len(self.tl(slug)["clips"][1]["cover"]), 1)
+        H.cli(self.home, "timeline", "uncover", slug, left["id"])
+        self.assertNotIn("cover", self.tl(slug)["clips"][0])
+        # undo = the story saved back as it was (what the UI's Undo does): no cover left
+        H.cli(self.home, "timeline", "set", slug, "-", input=json.dumps(before))
+        self.assertEqual(self.tl(slug), before)
+        # every op was a timeline.saved event, by whoever made it
+        saves = [e for e in H.events(self.home) if e["type"] == "timeline.saved" and e["data"]["project"] == slug]
+        self.assertGreaterEqual(len(saves), 8)
+
+    def test_old_timelines_are_unchanged(self):
+        lib = self.S.state()["media"]
+        old = {"aspect": "9:16", "captions": True,
+               "clips": [{"id": "abcd1234", "media": self.b, "in": 0.7, "out": 4.1, "label": "x"}]}
+        self.assertEqual(self.S.normalize_timeline(old, lib), old, "no new keys appear")
+        c = old["clips"][0]
+        self.assertEqual(self.S.cut_list(old), [])
+        self.assertEqual(self.S.cover_spans(c), [(0.0, 3.4, None)])
+        # no voice, no pace: the filter is the fades alone, the picture has no setpts
+        self.assertEqual(self.S.sound_filter(3.4, "off"), "afade=t=in:d=0.020,afade=t=out:st=3.380:d=0.020")
+        # a cover piece pointing at missing footage is dropped with a warning, never the clip
+        probs = []
+        tl = self.S.normalize_timeline({**old, "clips": [{**c, "cover": [{"media": "nope", "in": 0, "out": 1, "at": 1}]}]},
+                                       lib, probs)
+        self.assertNotIn("cover", tl["clips"][0])
+        self.assertEqual([k for k, _ in probs], ["cover"])
+
+    def test_bundle_carries_cover_footage(self):
+        slug = self.project("Bundled", captions="off")
+        H.cli(self.home, "timeline", "cover", slug, "1", "--with", self.r, 1.0, 2.0)
+        mids, _ = self.S.bundle_select(self.S.state(), [slug])
+        self.assertIn(self.r, mids)
+
+    # ---- voice ----
+    def commands(self, slug):
+        """Every ffmpeg command line a render of slug runs (in-process)."""
+        seen, ff, sh = [], self.S.ff, self.S.sh
+        self.S.ff = lambda cmd, *a, **k: (seen.append(cmd), ff(cmd, *a, **k))[1]
+        self.S.sh = lambda cmd, *a, **k: (seen.append(cmd), sh(cmd, *a, **k))[1]
+        try:
+            self.S.render(slug)
+        finally:
+            self.S.ff, self.S.sh = ff, sh
+        return [" ".join(map(str, c)) for c in seen if c and c[0] == "ffmpeg"]
+
+    def test_voice_chain_applies_when_natural_and_not_when_off(self):
+        chain = self.S.VOICE_CHAINS["natural"]
+        self.assertTrue(chain.startswith("highpass=f=85,afftdn"))
+        slug = self.project("Voice")
+        self.assertTrue(any(chain in c for c in self.commands(slug)), "spoken clips default to natural")
+        H.cli(self.home, "timeline", "voice", slug, "all", "off")
+        self.assertEqual(self.tl(slug).get("voice"), None)
+        H.cli(self.home, "timeline", "voice", slug, "1", "off")
+        cmds = self.commands(slug)
+        self.assertFalse(any("highpass" in c for c in cmds), "off: no chain")
+        H.cli(self.home, "timeline", "voice", slug, "all", "natural")
+        self.assertEqual(self.tl(slug)["voice"], "natural")
+        self.assertNotIn("voice", self.tl(slug)["clips"][0], "all clears per-clip choices")
+        self.assertTrue(any(chain + ",afade" in c for c in self.commands(slug)), "chain before the fades")
+        # silent b-roll gets no treatment by default
+        roll = self.project("Roll voice", 1.0, 4.0, media=self.r, snap=False)
+        self.assertFalse(any("highpass" in c for c in self.commands(roll)))
+        r = H.cli(self.home, "timeline", "voice", slug, "1", "loud", check=False)
+        self.assertNotEqual(r.returncode, 0)
+
+    # ---- tighten + pace ----
+    def test_tighten_shortens_pauses_in_silence_and_keeps_the_words(self):
+        regs = self.known["speech"]
+        loose = self.project("Loose", 0.5, 12.3)
+        tight = self.project("Tight", 0.5, 12.3)
+        f0, _ = self.render(loose)
+        res0, _ = self.check(loose)
+        rev = self.S.state()["projects"][tight]["rev"]
+        before = self.tl(tight)
+        r = H.cli(self.home, "timeline", "tighten", tight, "all", "--base", rev)
+        self.assertIn("2 pauses down to 0.12s", r.stderr)
+        clips = self.tl(tight)["clips"]
+        self.assertEqual(len(clips), 3)
+        real = json.loads((self.home / "media" / self.b / "speech.json").read_text())["regions"]
+        for c in clips:          # every cut in silence
+            for x in (c["in"], c["out"]):
+                self.assertFalse(any(a < x < b for a, b in real), f"cut {x} inside speech")
+        for c, d in zip(clips, clips[1:]):
+            gap = min(r[0] for r in real if r[0] >= d["in"] - 0.01) - max(r[1] for r in real if r[1] <= c["out"] + 0.01)
+            self.assertGreater(gap, 0.35)
+            kept = (c["out"] - max(r[1] for r in real if r[1] <= c["out"] + 0.01)) + \
+                (min(r[0] for r in real if r[0] >= d["in"] - 0.01) - d["in"])
+            self.assertAlmostEqual(kept, 0.12, delta=0.01)
+        f1, _ = self.render(tight)
+        self.assertLess(H.ffprobe(f1)["duration"], H.ffprobe(f0)["duration"] - 1.0)
+        res1, r1 = self.check(tight)
+        self.assertEqual(r1["cuts"]["status"], "pass", r1["cuts"])
+        self.assertIn("2 pause cuts", r1["cuts"]["detail"])
+        self.assertEqual(r1["pauses"]["status"], "pass", r1["pauses"])
+        import difflib
+        said = lambda res: [w for w in res["heard"].lower().replace(".", "").replace(",", "").split()]
+        self.assertGreater(difflib.SequenceMatcher(None, said(res0), said(res1)).ratio(), 0.9,
+                           (res0["heard"], res1["heard"]))
+        # snap leaves the pause cuts as tightened
+        H.cli(self.home, "timeline", "snap", tight, "all")
+        self.assertEqual([(c["in"], c["out"]) for c in self.tl(tight)["clips"][1:]][0][0], clips[1]["in"])
+        # undo
+        H.cli(self.home, "timeline", "set", tight, "-", input=json.dumps(before))
+        self.assertEqual(len(self.tl(tight)["clips"]), 1)
+
+    def test_tighten_keeps_cover_on_its_words(self):
+        slug = self.project("Tight cover", 0.5, 12.3, captions="off")
+        c = self.tl(slug)["clips"][0]
+        regs = self.known["speech"]
+        at = regs[0][1] - c["in"] - 0.6      # starts late in sentence 1, runs over the pause into 2
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 2.0, 4.0, "--at", round(at, 2))
+        H.cli(self.home, "timeline", "tighten", slug, "all")
+        clips = self.tl(slug)["clips"]
+        pieces = [(k, p) for k, c in enumerate(clips) for p in c.get("cover", [])]
+        # the b-roll plays on unbroken across the cut: where one piece stops the next starts
+        self.assertEqual([k for k, _ in pieces], [0, 1])
+        (_, p0), (_, p1) = pieces
+        self.assertAlmostEqual(p0["out"], p1["in"], places=3)
+        self.assertEqual(p1["at"], clips[1]["in"], "picks up at the start of the next piece")
+        self.assertAlmostEqual((p0["out"] - p0["in"]) + (p1["out"] - p1["in"]), 2.0, places=2)
+        self.render(slug)
+
+    def test_pace_speeds_the_clip_and_check_uses_its_clock(self):
+        slug = self.project("Pace", 0.5, 12.3)
+        f0, _ = self.render(slug)
+        H.cli(self.home, "timeline", "pace", slug, "all", "1.1")
+        self.assertEqual(self.tl(slug)["clips"][0]["pace"], 1.1)
+        r = H.cli(self.home, "timeline", "pace", slug, "1", "1.3", check=False)
+        self.assertNotEqual(r.returncode, 0, "faster than 1.2 is refused")
+        H.cli(self.home, "timeline", "snap", slug, "all")      # lead and tail on the export's clock
+        H.cli(self.home, "timeline", "tighten", slug, "all")
+        c = self.tl(slug)["clips"][0]
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 1.0, 3.2, "--at", 1.1)
+        f1, ev = self.render(slug)
+        want = sum((c["out"] - c["in"]) / 1.1 for c in self.tl(slug)["clips"])
+        self.assertAlmostEqual(H.ffprobe(f1)["duration"], want, delta=0.12)
+        self.assertAlmostEqual(ev["duration"], want, delta=0.01)
+        self.assertEqual([x["at"] for x in ev["cuts"] if x["kind"] == "picture"][0], 1.0,
+                         "a cover piece's place is on the sped-up clock")
+        res, r = self.check(slug)
+        for k in ("cuts", "pauses", "captions", "ending", "loudness"):
+            self.assertEqual(r[k]["status"], "pass", (k, r[k]))
+        self.assertTrue(any("atempo=1.1" in c for c in self.commands(slug)))
+
+
 @unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")
 class Agents(unittest.TestCase):
     """moments and draft through each built-in agent and a custom command. The agents are
