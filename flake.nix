@@ -2,7 +2,10 @@
   description = "studio — raw footage to post drafts, local-first";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   inputs.rust-overlay = { url = "github:oxalica/rust-overlay"; inputs.nixpkgs.follows = "nixpkgs"; };
-  outputs = { self, nixpkgs, rust-overlay, ... }:
+  # sync infrastructure (nix/): the Blossom server, and nix-darwin to check the darwin modules
+  inputs.blossom-server = { url = "github:hzrd149/blossom-server"; inputs.nixpkgs.follows = "nixpkgs"; };
+  inputs.nix-darwin = { url = "github:nix-darwin/nix-darwin"; inputs.nixpkgs.follows = "nixpkgs"; };
+  outputs = { self, nixpkgs, rust-overlay, ... }@inputs:
     let
       systems = [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ];
       darwin = [ "aarch64-darwin" ];
@@ -74,7 +77,7 @@
           passthru.backend = backend;
           meta.mainProgram = "studio-app";
         };
-    in {
+    in nixpkgs.lib.recursiveUpdate {
       packages = forAll (pkgs: {
         studio-backend = backendFor pkgs;
       }) // forDarwin (pkgs: {
@@ -123,5 +126,5 @@
         # just the Rust toolchain: CI and `test/run_all.sh --only rust`
         rust = pkgs.mkShell (rust.env // { packages = rust.packages; });
       });
-    };
+    } (import ./nix { inherit self nixpkgs systems; inherit (inputs) nix-darwin blossom-server; });
 }

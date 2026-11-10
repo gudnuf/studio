@@ -1,0 +1,48 @@
+# The studio's dev infrastructure: one nostr relay + one Blossom server, local.
+# Started by `nix run .#dev-infra` (nix/dev-infra.py), which writes both configs under
+# $STUDIO_INFRA_STATE and sets the variables below; not meant to be run by hand.
+version: "0.5"
+
+log_location: ${STUDIO_INFRA_STATE}/process-compose.log
+log_level: info
+
+processes:
+  relay:
+    command: ${STUDIO_INFRA_RELAY_BIN} --config ${STUDIO_INFRA_STATE}/relay/config.toml
+    working_dir: ${STUDIO_INFRA_STATE}/relay
+    log_location: ${STUDIO_INFRA_STATE}/relay/relay.log
+    environment:
+      - "RUST_LOG=warn,nostr_rs_relay=info"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: ${STUDIO_INFRA_RELAY_PORT}
+        path: /
+      initial_delay_seconds: 0
+      period_seconds: 1
+      failure_threshold: 30
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
+      max_restarts: 5
+
+  blossom:
+    command: ${STUDIO_INFRA_BLOSSOM_BIN} ${STUDIO_INFRA_STATE}/blossom/config.yml
+    working_dir: ${STUDIO_INFRA_STATE}/blossom
+    log_location: ${STUDIO_INFRA_STATE}/blossom/blossom.log
+    environment:
+      - "DENO_DIR=${STUDIO_INFRA_STATE}/blossom/deno"
+      - "BLOSSOM_REQUIRE_CONFIG=1"
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: ${STUDIO_INFRA_BLOSSOM_PORT}
+        # the landing page is off, so / is a 404; the static favicon is a cheap 200
+        path: /favicon.ico
+      initial_delay_seconds: 0
+      period_seconds: 1
+      failure_threshold: 60
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
+      max_restarts: 5
