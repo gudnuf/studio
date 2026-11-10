@@ -537,7 +537,6 @@ def prepare(ids, name, problems):
 MEDIA_EXT = S.VIDEO_EXT | S.AUDIO_EXT
 PACKAGES = {".app", ".photoslibrary", ".fcpbundle", ".imovielibrary", ".tvlibrary", ".bundle"}
 MAX_PATHS = 1000
-SETTLE_WAIT_SECS = float(os.environ.get("STUDIO_SETTLE_WAIT_SECS", 900))
 
 def expand_paths(paths):
     """Dropped paths -> (media files in drop order, [(name, reason)] skipped). A folder gives
@@ -575,22 +574,6 @@ def expand_paths(paths):
         files = files[:MAX_PATHS]
     return files, skipped
 
-def wait_settled(f, job):
-    """A file still being written (AirDrop, a copy from a card) is waited for, not refused:
-    it counts as settled once it hasn't changed for STUDIO_SETTLE_SECS."""
-    end = time.time() + SETTLE_WAIT_SECS
-    said = False
-    while True:
-        st = f.stat()
-        if time.time() - st.st_mtime >= S.SETTLE_SECS:
-            return
-        if time.time() > end:
-            raise RuntimeError(f"couldn't add {f.name}: it's still being copied")
-        if not said:
-            S.emit("job.progress", None, job=job, step="waiting", name=f.name)
-            said = True
-        time.sleep(0.5)
-
 def ingest_paths(paths, project, brand):
     """POST /api/ingest-paths: one job per media file (the first dropped is the first ready),
     each with the same safety rules as `studio ingest` (settled, hashed, probed in place,
@@ -601,7 +584,8 @@ def ingest_paths(paths, project, brand):
     for f in files:
         def fn(started, f=f):
             started()
-            wait_settled(f, getattr(S._ctx, "job", None))
+            job = getattr(S._ctx, "job", None)
+            S.wait_settled(f, on_wait=lambda: S.emit("job.progress", None, job=job, step="waiting", name=f.name))
             problems = []
             ids = S.ingest([f], brand, project, names={str(f): f.name}, settle=S.SETTLE_SECS,
                            problems=problems, move=False)

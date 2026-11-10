@@ -7,6 +7,8 @@
   studio proxy|speech|transcribe|keyframes|moments|cut|draft ID... | --all [--force]   one step
                                            (moments and draft call your agent: see below)
   studio media show ID                     one file: steps, moments (n, times, title, hook)
+  studio media move ID PROJECT             file it under another project (ingest never moves
+                                           footage out of a project, only out of the inbox)
   studio words ID [--from T --to T] [--grep WORD]   transcript words with timings
   studio words ID --fix WRONG RIGHT | --fix WRONG RIGHT --all   fix a misheard word
   studio posts ID [--json]                 post drafts, with the operator's rewrites
@@ -1328,6 +1330,28 @@ def timeline_save(slug, tl, actor="cli", base=None, problems=None):
 # ---------- steps -----------------------------------------------------------
 
 SETTLE_SECS = float(os.environ.get("STUDIO_SETTLE_SECS", 3))
+SETTLE_WAIT_SECS = float(os.environ.get("STUDIO_SETTLE_WAIT_SECS", 900))
+
+def wait_settled(f, settle=None, on_wait=None):
+    """A file still being written (AirDrop, a copy from a card, a render that just finished)
+    is waited for, not refused: it counts as settled once it hasn't changed for `settle`
+    seconds (STUDIO_SETTLE_SECS). on_wait() is called once if it has to wait. Gives up (Skip)
+    after STUDIO_SETTLE_WAIT_SECS."""
+    settle = SETTLE_SECS if settle is None else settle
+    end, said = time.time() + SETTLE_WAIT_SECS, False
+    while True:
+        try:
+            st = f.stat()
+        except FileNotFoundError:
+            raise Skip("it's gone")
+        if time.time() - st.st_mtime >= settle:
+            return
+        if time.time() > end:
+            raise Skip("it's still being copied")
+        if not said and on_wait:
+            on_wait()
+        said = True
+        time.sleep(0.25)
 
 class Skip(Exception):
     """A file ingest leaves where it is, with the reason printed."""
@@ -1365,9 +1389,11 @@ def tail_decodes(path, dur):
 
 def ingest(paths, brand="jefe", project=DEFAULT_PROJECT, names=None, settle=None, problems=None,
            move=True):
-    """Bring footage into the library. Per file: wait until it has stopped changing (an
-    AirDrop or copy still writing it is left for the next run), hash it, probe it where it
-    is, and only then move it (inbox/, uploads/) or copy it (anywhere else) into media/ID/.
+    """Bring footage into the library. Per file: wait until it has stopped changing (a file
+    named in `paths` is waited for; one found in inbox/ that's still being written is left for
+    the next run), hash it, probe it where it is, and only then move it (inbox/, uploads/) or
+    copy it (anywhere else) into media/ID/. Bytes already in the library are that media (by
+    sha256): it stays in its project unless that's the inbox (then it's sorted into `project`).
     A file that can't be used is reported and left where it was; one bad file never stops
     the batch. `problems`, if a list, collects (name, reason) for every media file skipped.
     move=False never moves a file, even out of inbox/ (the desktop app's drag and drop: the
@@ -1386,7 +1412,7 @@ def ingest(paths, brand="jefe", project=DEFAULT_PROJECT, names=None, settle=None
             print(f"  skip {display} (not media)")
             continue
         try:
-            mid = _ingest_one(f, display, brand, project, known, settle, inbox, move)
+            mid = _ingest_one(f, display, brand, project, known, settle, inbox, move, wait=bool(paths))
         except Exception as e:  # noqa: BLE001 — one bad file must not sink the batch
             reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
             if not isinstance(e, Skip):
@@ -1398,25 +1424,38 @@ def ingest(paths, brand="jefe", project=DEFAULT_PROJECT, names=None, settle=None
         ids.append(mid)
     return ids
 
-def _ingest_one(f, display, brand, project, known, settle, inbox, move_ok=True):
+def _ingest_one(f, display, brand, project, known, settle, inbox, move_ok=True, wait=False):
     try:
         st0 = f.stat()
     except FileNotFoundError:
         raise Skip("it's gone")
     if settle and time.time() - st0.st_mtime < settle:
-        raise Skip("still copying; run ingest again in a moment")
+        if not wait:
+            raise Skip("still copying; run ingest again in a moment")
+        wait_settled(f, settle, lambda: print(f"  wait {display} (still being written)", flush=True))
+        st0 = f.stat()
     if st0.st_size == 0:
         raise Skip("the file is empty")
     digest = receipt(f)
     st1 = f.stat()
     if (st1.st_size, st1.st_mtime_ns) != (st0.st_size, st0.st_mtime_ns):
         raise Skip("still copying (it changed while being read); run ingest again in a moment")
-    mid = digest[:12]
     if digest in known:
-        print(f"  have {display} → {mid}")
-        if library()[mid]["project"] != project:
+        # the same bytes are the same media. It stays where it is: moving it would take it out
+        # of another project (`studio media move` does that, on purpose). Unsorted footage
+        # (the inbox) is sorted into the project it's ingested for.
+        mid = known[digest]
+        where = library()[mid]["project"]
+        if where == DEFAULT_PROJECT and project != DEFAULT_PROJECT:
             emit("media.moved", mid, project=project)
+            print(f"  have {display} → {mid}  (moved from {where} to {project})")
+        elif where != project:
+            print(f"  have {display} → {mid}  (byte for byte the same as {library()[mid].get('name')!r} "
+                  f"in project {where}; any story can use it)")
+        else:
+            print(f"  have {display} → {mid}")
         return mid
+    mid = digest[:12]
     meta = probe_ok(f)                     # in place: nothing has moved yet
     d = mdir(mid)
     d.mkdir(parents=True, exist_ok=True)
@@ -4219,6 +4258,13 @@ def cmd_media(a):
     st = state()
     mid = media_resolve(st, a.id)
     it = st["media"][mid]
+    if a.action == "move":
+        if not a.project:
+            sys.exit("studio media move ID PROJECT")
+        ensure_project(a.project)
+        emit("media.moved", mid, project=a.project)
+        print(f"{mid}  {it['name']}  {it['project']} → {a.project}")
+        return
     done = " ".join(s for s in STEPS if s in it["steps"]) or "-"
     dims = f"{it['width']}x{it['height']}  " if it.get("has_video") else "audio only  "
     print(f"{mid}  {it['name']}  {fmt_t(it['duration'])}  {dims}project {it['project']}  steps: {done}")
@@ -4565,7 +4611,8 @@ def main():
     p.add_argument("--ack", nargs="+", metavar="ID", help="mark notes seen (the operator gets a tick)")
     p = sub.add_parser("say", help="reply to the operator in the UI's Tell the agent tab")
     p.add_argument("text"); p.add_argument("-p", "--project"); p.add_argument("--re", metavar="NOTE_ID")
-    p = sub.add_parser("media"); p.add_argument("action", choices=["show"]); p.add_argument("id")
+    p = sub.add_parser("media"); p.add_argument("action", choices=["show", "move"]); p.add_argument("id")
+    p.add_argument("project", nargs="?", help="move: the project it belongs to now")
     p = sub.add_parser("posts"); p.add_argument("id"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("words"); p.add_argument("id", nargs="?")
     p.add_argument("--from", dest="start", type=float); p.add_argument("--to", type=float)
@@ -4597,7 +4644,9 @@ def main():
         import server
         server.serve(a.port, open_window=not a.no_open)
     elif a.cmd in ("run", "ingest"):
-        new = ingest(a.files, a.brand, a.project)
+        before, problems = set(library()), []
+        ids = ingest(a.files, a.brand, a.project, problems=problems)
+        new = [m for m in ids if m not in before]
         if a.cmd == "run":
             pending = [m for m, it in library().items() if "draft" not in it["steps"]]
             if pending:
@@ -4607,10 +4656,12 @@ def main():
             if not a.no_open and sys.platform == "darwin":
                 subprocess.run(["open", str(out)])
         else:
-            if new:
-                run_pipeline(new, LOCAL_STEPS)
-            if not new:
-                print("nothing new")
+            if ids:
+                run_pipeline(ids, LOCAL_STEPS)
+            print(f"{len(new)} new, {len(ids) - len(new)} already in the library"
+                  + (f", {len(problems)} skipped (see above)" if problems else ""))
+            if problems and a.files:      # a file you named that didn't come in
+                sys.exit(1)
     elif a.cmd in STEPS:
         if not a.ids and not a.all:
             sys.exit(f"studio {a.cmd}: pass media ids, or --all for every file missing it"

@@ -137,13 +137,6 @@ class CLI(unittest.TestCase):
         self.assertEqual(len(self.st()["media"]), 4)
         self.assertIn(self.mid("phone-talking.mov"), out)
 
-    def test_ingest_into_other_project_moves(self):
-        slug = self.project("Move Target")
-        H.cli(self.home, "ingest", "-p", slug, self.fx / "voice-memo.m4a")
-        self.assertEqual(self.st()["media"][self.mid("voice-memo.m4a")]["project"], slug)
-        H.cli(self.home, "ingest", "-p", "shoot", self.fx / "voice-memo.m4a")
-        self.assertEqual(self.st()["media"][self.mid("voice-memo.m4a")]["project"], "shoot")
-
     def test_ingest_from_inbox(self):
         home = H.new_home("inbox")
         settled(shutil.copy(self.fx / "voice-memo.m4a", home / "inbox" / "memo.m4a"))
@@ -518,6 +511,63 @@ class CLI(unittest.TestCase):
         full = hashlib.sha256(walk).hexdigest()[:12]
         self.assertIn(f"new  a-walk.mov → {full}", r.stdout)
         self.assertFalse((inbox / "a-walk.mov").exists())
+
+    def test_ingest_waits_for_a_file_it_was_given_that_was_just_written(self):
+        """A render or copy finished a moment ago is waited for, not refused. It used to say
+        `skip NAME (still copying...)` then `nothing new`, which read as "a duplicate"."""
+        home = H.new_home("ingest-fresh")
+        f = H.new_home("ingest-fresh-src") / "fresh render.m4a"
+        shutil.copy(self.fx / "voice-memo.m4a", f)          # mtime: now
+        r = H.cli(home, "ingest", "-p", "a", f, env=H.env_for(home, STUDIO_SETTLE_SECS="1.5"))
+        self.assertIn("wait fresh render.m4a", r.stdout)
+        self.assertRegex(r.stdout, r"new  fresh render\.m4a → [0-9a-f]{12}")
+        self.assertIn("1 new, 0 already in the library", r.stdout)
+        self.assertNotIn("nothing new", r.stdout)
+
+    def test_ingest_never_takes_media_out_of_another_project(self):
+        """The same bytes are the same media; ingesting them for another project says where they
+        are and leaves them there. Only unsorted footage (the inbox) is sorted on ingest."""
+        import hashlib
+        home = H.new_home("ingest-dedup")
+        src = H.new_home("ingest-dedup-src")
+        a = settled(shutil.copy(self.fx / "voice-memo.m4a", src / "card.m4a"))
+        b = settled(shutil.copy(self.fx / "voice-memo.m4a", src / "card copy.m4a"))
+        mid = hashlib.sha256(a.read_bytes()).hexdigest()[:12]
+        H.cli(home, "ingest", "-p", "one", a)
+        r = H.cli(home, "ingest", "-p", "two", b)
+        self.assertIn(f"have card copy.m4a → {mid}  (byte for byte the same as 'card.m4a' in project one", r.stdout)
+        self.assertIn("0 new, 1 already in the library", r.stdout)
+        self.assertFalse([e for e in H.events(home) if e["type"] == "media.moved"], "taken from project one")
+        S = H.import_studio(home)
+        try:
+            self.assertEqual(S.state()["media"][mid]["project"], "one")
+        finally:
+            S.HOME = self.home
+        # different bytes are different media, whatever they're called
+        c = src / "card.m4a"
+        c.write_bytes(c.read_bytes() + b"\0"); settled(c)
+        r = H.cli(home, "ingest", "-p", "two", c)
+        self.assertNotIn(mid, r.stdout)
+        self.assertIn("1 new, 0 already in the library", r.stdout)
+        # unsorted footage is sorted into the project it's ingested for; media move does it on purpose
+        inb = settled(shutil.copy(self.fx / "phone-talking.mov", src / "talk.mov"))
+        H.cli(home, "ingest", inb)
+        r = H.cli(home, "ingest", "-p", "three", inb)
+        tid = hashlib.sha256(inb.read_bytes()).hexdigest()[:12]
+        self.assertIn(f"(moved from inbox to three)", r.stdout)
+        r = H.cli(home, "media", "move", mid, "two")
+        self.assertIn(f"{mid}  card.m4a  one → two", r.stdout)
+        moved = [(e["media"], e["data"]["project"]) for e in H.events(home) if e["type"] == "media.moved"]
+        self.assertEqual(moved, [(tid, "three"), (mid, "two")])
+
+    def test_ingest_exits_1_when_a_file_it_was_given_is_skipped(self):
+        home = H.new_home("ingest-named")
+        bad = H.new_home("ingest-named-src") / "broken.mov"
+        bad.write_bytes(b"\x00\x00\x00\x18ftypqt  " + os.urandom(4000)); settled(bad)
+        r = H.cli(home, "ingest", bad, check=False)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("skip broken.mov (can't read it", r.stdout)
+        self.assertIn("0 new, 0 already in the library, 1 skipped", r.stdout)
 
     def test_new_project_starts_at_rev_0(self):
         """S3: a never-saved project has rev 0 (so the UI's first save carries ?base=0)."""

@@ -159,6 +159,7 @@ studio notes --ack NOTE_ID        # mark a note seen without replying
 
 studio ls [-p P]                  # library + finished steps
 studio media show ID              # one file: moments (n, in–out, title, hook), drafts
+studio media move ID PROJECT      # file it under another project
 studio words ID --grep privacy    # word timings, so you can "start on the word privacy"
 studio words ID --from 10 --to 20
 studio words ID --fix Hefe Jefe   # fix a misheard word in that file's transcript (and captions)
@@ -203,11 +204,18 @@ studio agent                      # which agent moments/draft call, the command 
 ```
 
 `studio ingest` takes only files that have stopped changing for 3 seconds
-(`STUDIO_SETTLE_SECS`): one that's still being AirDropped or copied prints `skip NAME (still
-copying…)` and stays in inbox/ for the next run. A file that can't be read, has no picture or
-sound, is 0 seconds long, or whose end is missing prints `skip NAME (reason)` and also stays
-where it is. Nothing moves into the library before it has been fully hashed and probed, and one
-bad file never stops the rest.
+(`STUDIO_SETTLE_SECS`). A file you name that was written a moment ago (a render that just
+finished, a `cp`) is waited for (`wait NAME`); one in inbox/ that's still being AirDropped or
+copied prints `skip NAME (still copying…)` and stays there for the next run. A file that can't
+be read, has no picture or sound, is 0 seconds long, or whose end is missing prints
+`skip NAME (reason)` and also stays where it is. Nothing moves into the library before it has
+been fully hashed and probed, and one bad file never stops the rest. The last line counts what
+happened (`1 new, 0 already in the library, 1 skipped`); a file you named that was skipped
+makes it exit 1.
+
+Media is its bytes (sha256): the same bytes ingested again are the same media (`have NAME →
+ID`), whatever the file is called. It stays in its project (any story can use it), unless it was
+unsorted in the inbox; `studio media move ID PROJECT` files it elsewhere on purpose.
 
 The timeline verbs fail loudly. `trim` with OUT ≤ IN exits 1 and leaves the clip alone.
 Clamping to the media's length prints a `warning:` to stderr. A `set` or `add` that would
