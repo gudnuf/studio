@@ -34,7 +34,7 @@ let
       default = "127.0.0.1";
       description = ''
         Bind address. Loopback by default; with `domain` set nginx is the public face and this
-        stays loopback. "0.0.0.0" exposes plain http:// to the network (a LAN, a tailnet).
+        stays loopback. "0.0.0.0" exposes plain http:// to the local network (home Wi-Fi).
       '';
     };
     port = lib.mkOption {
@@ -252,7 +252,7 @@ in
 
       config = lib.mkIf cfg.enable {
         assertions = assertions cfg ++ [
-          { assertion = !cfg.acme; message = "services.studio-blossom.acme is NixOS-only; on darwin terminate TLS elsewhere (tailscale serve, a proxy)"; }
+          { assertion = !cfg.acme; message = "services.studio-blossom.acme is NixOS-only; on darwin put a reverse proxy with its own TLS (Caddy, nginx) in front, see docs/sync.md"; }
         ];
 
         system.activationScripts.postActivation.text = ''

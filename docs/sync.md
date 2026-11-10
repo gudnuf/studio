@@ -84,8 +84,8 @@ host. They were also evaluated into the real `nous` darwin configuration from ni
 The operator's own infrastructure plans (asked of chira 2026-11-09; see
 `~/athanor/CLAUDE-HANDOFF.md`) decide only these values; nothing else changes:
 
-1. **The host**: hetzner (77.42.27.244), the damsac VPS, the always-on fiduciary laptop
-   (tailscale `nixos`), or nous itself.
+1. **The host**: hetzner (77.42.27.244), the damsac VPS, the always-on fiduciary laptop, or nous
+   itself.
 2. **The domain** (`domain`, and `acme = true` on NixOS) for each server.
 3. **Where blobs live**: local disk (`dataDir`, e.g. the fiduciary laptop's spare drive) or an
    S3-compatible bucket (`storage.s3` + `environmentFile` holding `S3_ACCESS_KEY` /
@@ -133,7 +133,30 @@ inputs.studio.darwinModules.studio-infra
 }
 ```
 
-On darwin there is no ACME: put TLS in front with `tailscale serve` or a proxy if the phone needs
-`wss://` away from home. The `blossom-server` package has pinned dependency hashes for
+### Away from home
+
+The phone reaches the servers over `wss://` / `https://` only when they have a domain and TLS.
+Until then it syncs on home Wi-Fi (`nix run .#dev-infra -- --lan`) and nowhere else. Two ways to
+get there:
+
+1. **Deploy on a host with a domain** (the CHIRA SEAM above): NixOS with `domain` + `acme = true`
+   gives nginx + Let's Encrypt in front of both servers. This is the intended path.
+2. **Optional, the darwin modules on nous:** they have no ACME. Put a reverse proxy with its own
+   TLS in front, e.g. Caddy (needs a domain pointing at the Mac and ports 80/443 reachable):
+
+   ```
+   relay.example.org {
+     reverse_proxy 127.0.0.1:7347
+   }
+   blossom.example.org {
+     request_body { max_size 128MB }
+     reverse_proxy 127.0.0.1:7348
+   }
+   ```
+
+   Keep both modules on `address = "127.0.0.1"` and set their `domain` so blob URLs and the relay
+   URL name the public host.
+
+The `blossom-server` package has pinned dependency hashes for
 `x86_64-linux` and `aarch64-darwin`; on `aarch64-linux` the first build prints the hash to add to
 `nix/blossom-server.nix`.
