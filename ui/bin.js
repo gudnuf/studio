@@ -287,7 +287,7 @@ function verdictLine(x) {
   const check = v.state !== 'ready' && x.file === project()?.exports?.at(-1)?.file
     ? el('button.btn.xs.ghost', { text: 'Check', 'data-tip': 'Measure it against the bar (QUALITY.md)', onclick: () => api.checkExport(S.slug).catch(e => toast(e.message, { kind: 'error' })) }) : null;
   const exc = (v.excepted || []).map(e => el('div.verdict-exc', {},
-    el('span', { text: `Exception: ${e.rule} — ${e.why || ''}${isAgent(e.by) ? ' (the agent)' : ''}`, title: e.item }),
+    el('span', { text: `Exception: ${e.rule}${e.declares ? ` (declared ${e.declares}${e.text ? ` “${e.text}”` : ''})` : ''} — ${e.why || ''}${isAgent(e.by) ? ' (the agent)' : ''}`, title: e.item }),
     el('button.btn.xs.ghost', { text: 'Revoke', 'data-tip': 'Take this exception back: the check fails on it again', onclick: () => confirmRevoke(e) })));
   return el('div.ex-verdict', {}, el('div', {}, head, check), ...exc);
 }

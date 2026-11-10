@@ -115,8 +115,8 @@ const canon = tl => tl ? JSON.stringify([tl.aspect, !!tl.captions,
   (tl.clips || []).map(c => [c.id, c.media, round3(+c.in), round3(+c.out), c.label || '', c.moment ?? null, c.fit || null,
     ...extras(c)]), tl.voice || null]) : '';
 /** What the agent can set that the UI only carries along: cover (b-roll over the clip's sound),
- *  voice, pace, onscreen (declared on-screen text) and card (a designed card). They count as changes, so an agent's edit to them is adopted and kept. */
-const extras = c => [JSON.stringify(c.cover || null), c.voice || null, c.pace || null, c.onscreen || null, !!c.card];
+ *  voice and pace. They count as changes, so an agent's edit to them is adopted and kept. */
+const extras = c => [JSON.stringify(c.cover || null), c.voice || null, c.pace || null];
 export const same = (a, b) => canon(a) === canon(b);
 
 /** Story time where clip `id` starts. */

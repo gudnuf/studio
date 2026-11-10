@@ -63,10 +63,11 @@ def steps_job(ids, steps, force=False):
 
 
 # ---------- /api/state, cached ------------------------------------------------
-# Rebuilt only when the log grows, a moments/drafts/keyframes file changes, or the queue
-# moves; otherwise it's the same bytes as last time.
+# Rebuilt only when the log grows, a moments/drafts/keyframes file changes, an export file
+# changes on disk (its verdict is about its bytes), or the queue moves; otherwise it's the
+# same bytes as last time.
 
-_state_cache = {"key": None, "body": None, "mids": ()}
+_state_cache = {"key": None, "body": None, "mids": (), "exports": ()}
 _state_lock = threading.Lock()
 _SIDE = ("moments.json", "drafts.json", "keyframes/index.json")
 
@@ -82,13 +83,23 @@ def _side_sig(mids):
                 sig.append(None)
     return tuple(sig)
 
+def _files_sig(rels):
+    sig = []
+    for rel in rels:
+        try:
+            st = os.stat(S.HOME / rel)
+            sig.append((st.st_mtime_ns, st.st_size, st.st_ino))
+        except FileNotFoundError:
+            sig.append(None)
+    return tuple(sig)
+
 def state_body():
     with _state_lock:
         c = _state_cache
         lsig, queued = S.log_sig(), len(_waiting)
         qjobs = list(_waiting.values())
         if c["key"] and c["key"][0] == lsig:
-            key = (lsig, queued, _side_sig(c["mids"]))
+            key = (lsig, queued, _side_sig(c["mids"]), _files_sig(c["exports"]))
             if key == c["key"]:
                 return c["body"]
         st = S.state()
@@ -114,7 +125,9 @@ def state_body():
         st["brands"] = sorted(p.stem for p in (S.HERE / "brands").glob("*.md"))
         st["hw"] = {"videotoolbox": S.hw()["enc"], "render_jobs": S.render_pool_size()}
         mids = tuple(st["media"])
-        c.update(key=(lsig, queued, _side_sig(mids)), body=json.dumps(st).encode(), mids=mids)
+        exports = tuple(ex["file"] for pj in st["projects"].values() for ex in pj.get("exports") or [])
+        c.update(key=(lsig, queued, _side_sig(mids), _files_sig(exports)), body=json.dumps(st).encode(),
+                 mids=mids, exports=exports)
         return c["body"]
 
 

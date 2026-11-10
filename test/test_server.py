@@ -554,6 +554,16 @@ class Ready(unittest.TestCase):
         v = self.st()["projects"][slug]["exports"][-1]["verdict"]
         self.assertTrue(chk["ok"], chk["failed"])
         self.assertEqual(v["state"], "ready", v)
+        # bytes changed on disk with nothing in the log: the UI must not keep saying ready
+        f = self.home / v.get("file", self.st()["projects"][slug]["exports"][-1]["file"])
+        good = f.read_bytes()
+        with open(f, "ab") as fh:
+            fh.write(b"\0")
+        self.assertEqual(self.st()["projects"][slug]["exports"][-1]["verdict"]["state"], "unchecked")
+        f.write_bytes(good)
+        self.assertEqual(self.st()["projects"][slug]["exports"][-1]["verdict"]["state"], "ready")
+        s_, _, body = self.srv.request("POST", "/api/choice", {"project": slug, "shown": [], "chosen": None})
+        self.assertEqual(s_, 400, body)
         x = v["excepted"][0]["exception"]
         self.srv.json("POST", "/api/exceptions/revoke", {"project": slug, "id": x, "why": "too short"})
         rv = [e for e in H.events(self.home) if e["type"] == "exception.revoked"][-1]["data"]

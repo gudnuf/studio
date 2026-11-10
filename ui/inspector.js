@@ -606,7 +606,8 @@ function draftField(m, key, n, f, label, tip, limit, original) {
   }, 500);
   const mark = () => { reset.hidden = edited.hidden = ta.value === original; };
   // the post as the agent drafted it, kept as is or rewritten: one choice each time
-  const choice = action => S.slug && api.logChoice({ project: S.slug, kind: 'draft', action, shown: [`${mid}@${n}:${f}`],
+  let logged = null;   // one choice per text: a blur or a Copy of the same words logs once
+  const choice = action => S.slug && logged !== `${action}|${ta.value}` && (logged = `${action}|${ta.value}`) && api.logChoice({ project: S.slug, kind: 'draft', action, shown: [`${mid}@${n}:${f}`],
     chosen: `${mid}@${n}:${f}`, ...(action === 'rewrite' ? { text: ta.value } : {}),
     options: { [`${mid}@${n}:${f}`]: { original } } });
   let dirtyField = false;
@@ -650,7 +651,7 @@ export function describe(ev) {
     case 'step.transcribe': return d.skipped ? `${m}: no sound — nothing to write out` : `wrote out ${plural(d.words ?? 0, 'word')} of ${m}`;
     case 'step.proxy': return d.skipped ? `${m}: audio only — no preview needed` : `made a preview of ${m}`;
     case 'step.speech': return d.skipped ? `${m}: no sound — no speech to find` : `found ${plural(d.regions ?? 0, 'stretch', 'stretches')} of speech in ${m}`;
-    case 'exception.granted': return `let “${pname(d.project)}” break the ${d.rule} rule${d.clip ? ' on one clip' : ''}: ${String(d.why || '').slice(0, 140)}`;
+    case 'exception.granted': return `${d.kind === 'onscreen' ? `declared on-screen text “${String(d.text || '').slice(0, 60)}” as the hook of` : d.kind === 'card' ? 'declared a designed card in' : 'let'} “${pname(d.project)}”${d.kind ? '' : ` break the ${d.rule} rule${d.clip ? ' on one clip' : ''}`}: ${String(d.why || '').slice(0, 140)}`;
     case 'exception.revoked': return `took back an exception (${d.rule}) in “${pname(d.project)}”${d.why ? `: ${String(d.why).slice(0, 140)}` : ''}`;
     case 'choice': return `chose ${d.chosen ? `${d.kind} ${d.position + 1} of ${(d.shown || []).length}` : `none of ${(d.shown || []).length}`}${d.action !== 'pick' ? ` (${d.action})` : ''}${d.blind ? ' blind' : ''}`;
     case 'blind.round': return `set up a blind A/B of ${Object.keys(d.labels || {}).length} versions of “${pname(d.project)}”`;
