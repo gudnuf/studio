@@ -77,8 +77,20 @@ _ctx = threading.local()           # .job: the server job this thread works for 
 def log_path():
     return HOME / "events.jsonl"
 
+def uuid7():
+    """A UUIDv7 (RFC 9562), monotonic within a process: Python 3.14's uuid.uuid7 (method 3, a
+    sub-millisecond counter): needs 3.14, the flake's python3. docs/events.md §2 relies on the order."""
+    import uuid
+    return str(uuid.uuid7())
+
+def device_name():
+    """Which device wrote an event (docs/events.md): STUDIO_DEVICE, else the short hostname."""
+    import socket
+    return os.environ.get("STUDIO_DEVICE") or socket.gethostname().split(".")[0] or "unknown"
+
 def emit(type_, media=None, **data):
-    ev = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    ev = {"id": uuid7(), "device": device_name(),
+          "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
           "type": type_, "media": media, "data": data}
     append_events([ev])
     return ev

@@ -614,6 +614,28 @@ class CLI(unittest.TestCase):
         self.assertEqual(r.returncode, 3, "an edit based on rev 0 must not overwrite the agent's save")
         self.assertEqual(len(self.tl(slug)["clips"]), 1)
 
+    def test_emit_has_id_and_device(self):
+        """docs/events.md: every new event carries id (UUIDv7, time-ordered) and device
+        (STUDIO_DEVICE, else the short hostname); the fold ignores both."""
+        import re, socket, uuid
+        home = H.new_home("envelope")
+        H.cli(home, "project", "new", "One", env=H.env_for(home, STUDIO_DEVICE="test-phone"))
+        H.cli(home, "say", "hello", "-p", "one")
+        H.cli(home, "say", "again", "-p", "one")
+        e1, e2, e3 = H.events(home)
+        self.assertEqual(list(e1), ["id", "device", "ts", "type", "media", "data"])
+        self.assertEqual(e1["device"], "test-phone")
+        self.assertEqual(e3["device"], socket.gethostname().split(".")[0])
+        for e in (e1, e2, e3):
+            u = uuid.UUID(e["id"])
+            self.assertEqual(u.version, 7, e["id"])
+            self.assertRegex(e["id"], re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab]"))
+        self.assertEqual(len({e1["id"], e2["id"], e3["id"]}), 3)
+        self.assertLessEqual(e1["id"][:13], e3["id"][:13], "UUIDv7 ids sort by time")
+        S = H.import_studio(home)
+        self.assertNotIn("device", json.dumps(S.state()["projects"]["one"]))
+        self.S.HOME = self.home
+
     def test_event_log_survives_a_torn_line(self):
         """S5: a writer that died mid-line must not swallow the next event or crash readers."""
         home = H.new_home("torn")
