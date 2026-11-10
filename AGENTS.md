@@ -77,10 +77,12 @@ without replying. `studio log -n 20` shows the latest events from both of you.
 [QUALITY.md](QUALITY.md) is the bar. Read it before you build a story. Then, every time:
 
 1. `studio render P`, then `studio check P`. It measures the export against the hard rules
-   (cuts on speech edges, first word, pauses, length, loudness, black or frozen picture,
-   captions against what the export really says, the last word) and exits 1 if one fails.
+   (cuts on speech edges, first word, pauses, length, loudness, black or frozen picture, and
+   at every cut: no stray or flashed frames, no jump cut, no clipped word, no click, no held
+   frame; captions against what the export really says, the last word) and exits 1 if one fails.
 2. **Look at the review sheet** it prints the path of: `cut-*.png` (frames, waveform, speech
-   and the words heard, 1.5s either side of every cut) and `contact.png` (the whole export).
+   and the words heard, 1.5s either side of every cut), one nine-frame strip per cut finding
+   (`jump-f00283.png`: the frame numbers are the export's) and `contact.png` (the whole export).
 3. A FAIL: fix it (`timeline snap`, trim, split a long pause out, drop the beat), render and
    check again. Up to 3 rounds. Still failing: tell the operator what fails and what to shoot.
 4. Answer every judgment rule `check` lists, honestly, one line each. Any "no" sends the reel
@@ -99,7 +101,7 @@ trying. Write the why so the operator can judge it in one read: what the picture
 that the rule misses. Then check again; the exception shows as `EXC` with your reason, and you
 tell the operator which you granted. They may revoke it (`exception.revoked`, with their why);
 read those, they are how your taste gets tuned. Only `pauses`, `shortest`, `first word`,
-`picture` and `length` bend. A label word ("payoff", "hold") no longer exempts anything.
+`picture`, `length`, `jump` and `held` bend. A label word ("payoff", "hold") no longer exempts anything.
 
 An exception binds to what it was granted on: the clip as it is now (media, in/out, every
 effect; not its label), or the whole story when no clip is named. Change that clip (or, for a
@@ -137,6 +139,16 @@ To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more 
 silence). Tightening only removes silence; it never joins words into something nobody said.
 
 A held shot or pause that is meant (a payoff, a reveal) gets an exception, with why (above).
+
+**Jump cuts.** A cut between two moments of the same footage (what `tighten` makes, a trimmed
+take, a cover piece that skips ahead in its own file) is a jump cut, and `check` fails it unless
+something hides it: cover over one side, a punch-in (derived media), or another shot. A jump
+that's meant gets `exception grant P jump CLIP` (the clip after the cut).
+
+**Derived media** (a file you made with ffmpeg and ingested: a card, a punch-in, a sentence with
+a tone handle): a room-tone handle is sound only. Never concat picture from another moment of
+the file; it shows as frames that belong to neither shot (`flash`). The same bytes ingested again
+are the same media (`have NAME → ID`); it stays in its project and any story can use it.
 
 ## AI steps
 

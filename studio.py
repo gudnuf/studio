@@ -51,7 +51,7 @@ in this directory provides them) and, for moments and draft, a coding agent's CL
 STUDIO_AGENT=claude|codex|goose (default: the first of those on PATH), or STUDIO_AGENT_CMD
 for any other command that reads a prompt on stdin and prints the reply.
 """
-import argparse, bisect, copy, ctypes, datetime, errno, hashlib, html, json, math, os, re, shlex, shutil, subprocess, sys, tempfile, threading, time
+import argparse, bisect, copy, ctypes, datetime, errno, hashlib, html, itertools, json, math, os, re, shlex, shutil, subprocess, sys, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -348,6 +348,8 @@ EXCEPTABLE = {
     "first word": "a silent cold open on action (<= 1.5s, natural sound)",
     "picture": "a held or dark frame that is meant",
     "length": "a reel outside 15-35s whose every beat earns it",
+    "jump": "a jump cut that is meant (time skipped on purpose, in plain sight)",
+    "held": "a frame held on purpose (a freeze on the payoff)",
 }
 
 def rule_id(name):
@@ -1124,7 +1126,8 @@ def cover_spans(clip, fps=30):
         else:
             out.append(s)
     if len(out) > 1 and out[0][1] - out[0][0] < COVER_MIN:
-        out[1][0] = out.pop(0)[0]
+        first = out.pop(0)
+        out[0][0] = first[0]
     return [(round(o0, 4), round(o1, 4), x) for o0, o1, x in out]
 
 def cover_src(piece, clip, o0):
@@ -1197,8 +1200,18 @@ def clip_pace(clip):
         return 1.0
 
 def clip_len(clip):
-    """How long the clip lasts in the export."""
+    """How long the clip lasts in the export, before it's rounded to whole frames."""
     return (clip["out"] - clip["in"]) / clip_pace(clip)
+
+FPS = 30             # every export runs at 30 fps, and every clip is a whole number of its frames
+SR = 48000           # and its sound at 48 kHz: one frame is exactly SR / FPS = 1600 samples
+
+def frames_of(secs):
+    return max(1, int(round(secs * FPS + 1e-6)))
+
+def clip_frames(clip):
+    """How many export frames the clip lasts: its picture and its sound, exactly."""
+    return frames_of(clip_len(clip))
 
 # Spoken cuts sit on speech edges (QUALITY.md): a lead-in of 0.05-0.15 s before the first
 # word, >= 0.25 s of tail after the last one's decay, never inside speech. Lead + tail stay
@@ -2236,7 +2249,26 @@ def stream_sig(path):
                          "sha256", "-show_streams", str(path)]))
     keys = ("codec_name", "profile", "level", "width", "height", "pix_fmt", "r_frame_rate",
             "time_base", "sample_rate", "channels", "extradata_hash")
-    return json.dumps([{k: st.get(k) for k in keys} for st in out["streams"]], sort_keys=True)
+    # a timecode (tmcd) or other data track isn't joined: parts never carry one (NO_TMCD), and
+    # if one did it must not force a re-encode of the whole join
+    return json.dumps([{k: st.get(k) for k in keys} for st in out["streams"]
+                       if st.get("codec_type") in ("video", "audio")], sort_keys=True)
+
+# Parts carry no metadata and no timecode track. DJI sources have one (tmcd) and derived media
+# don't; copied into some parts and not others it made their streams differ, so the join was
+# re-encoded and every cut landed on a predicted frame (a soft first frame).
+NO_TMCD = ["-map_metadata", "-1", "-write_tmcd", "0"]
+
+def part_audio(part):
+    """A part's sound: PCM in the intermediate parts (sample-exact, so a part's sound lasts
+    exactly as long as its picture and the join has nothing to hold), AAC in a finished file."""
+    return ["-c:a", "pcm_s16le"] if part else ["-c:a", "aac", "-b:a", "160k"]
+
+def frame_rate(pace=1.0):
+    """The picture onto the export's frame grid: from 0 (a seek can leave the first frame at
+    1/30 s), at the clip's pace, padded by cloning the last frame so -frames:v always has N."""
+    return (f"setpts=(PTS-STARTPTS)/{pace:g}," if pace != 1.0 else "setpts=PTS-STARTPTS,") + \
+        f"fps={FPS},tpad=stop_mode=clone:stop_duration=1"
 
 def frame_filter(w, h):
     return f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1"
@@ -2262,7 +2294,7 @@ def fit_graph(w, h, sw, sh, pre_bg, pre_fg, post):
 FADE = 0.02          # seconds of audio fade at every cut (QUALITY.md: 10-30 ms)
 
 def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=None, fit=None,
-                   chunks=None, audio=True, voice="off", pace=1.0):
+                   chunks=None, audio=True, voice="off", pace=1.0, frames=None, part=False):
     """One clip of source media, cropped to aspect, captions burned in, stereo 48k audio
     (silence if the source has none) so segments concat losslessly. On Apple silicon the
     decode and the cover-scale run on the media engine/GPU; only the cropped output-size frame
@@ -2270,7 +2302,9 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     settings, whichever decode path it took. chunks: the captions to burn (segment time)
     instead of the item's own words (a cover piece shows the sound's captions); audio=False:
     picture only; voice: a VOICE_CHAINS treatment of the sound, before the fades; pace: play
-    a-b this much faster (picture and sound; chunks are then on the sped-up clock)."""
+    a-b this much faster (picture and sound; chunks are then on the sped-up clock). frames:
+    exactly this many export frames (default (b - a) / pace, rounded), sound exactly as long;
+    part: an intermediate part of a render (PCM sound, see part_audio)."""
     w, h = ASPECTS[aspect]
     fit = fit if fit in FITS else fit_default(item, aspect)
     ass = out.with_suffix(".ass")
@@ -2293,9 +2327,10 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     crop_w = min(sw_, even(min(sw_, sh_ * w / h)))
     crop_h = min(sh_, even(min(sh_, sw_ * h / w)))
     gpu_crop = f"crop={crop_w}:{crop_h}" if (crop_w, crop_h) != (sw_, sh_) else None
+    n = frames or frames_of((b - a) / pace)
     # a short fade in and out on every part's audio: no click where two parts meet
-    fades = sound_filter(b - a, voice, pace)
-    rate = f"setpts=PTS/{pace:g},fps=30" if pace != 1.0 else "fps=30"
+    fades = sound_filter(n, voice, pace)
+    rate = frame_rate(pace)
 
     def build(use_hw):
         down = "hwdownload,format=p010le,format=nv12" if vi["tenbit"] else "hwdownload,format=nv12"
@@ -2319,32 +2354,34 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
         cmd = ["ffmpeg", "-y", "-v", "error", *_dec(use_hw), "-ss", str(a), "-to", str(b),
                "-i", item["path"]]
         if not audio:
-            return cmd + ["-vf", vf, "-map", "0:v:0", "-an", *venc("export", 60),
-                          "-movflags", "+faststart", out.name]
+            return cmd + ["-vf", vf, "-map", "0:v:0", "-an", *venc("export", 60), "-frames:v", str(n),
+                          *NO_TMCD, "-movflags", "+faststart", out.name]
         if item["has_audio"]:
             amap = ["-map", "0:v:0", "-map", "0:a:0"]
         else:
-            cmd += ["-f", "lavfi", "-t", str(b - a), "-i", "anullsrc=r=48000:cl=stereo"]
+            cmd += ["-f", "lavfi", "-t", str(b - a), "-i", f"anullsrc=r={SR}:cl=stereo"]
             amap = ["-map", "0:v:0", "-map", "1:a:0"]
-        return cmd + ["-vf", vf, *amap, "-af", fades, *venc("export", 60), "-c:a", "aac",
-                      "-b:a", "160k", "-ar", "48000", "-ac", "2", "-shortest", "-movflags",
+        return cmd + ["-vf", vf, *amap, "-af", fades, *venc("export", 60), "-frames:v", str(n),
+                      *part_audio(part), "-ar", str(SR), "-ac", "2", *NO_TMCD, "-movflags",
                       "+faststart", out.name]
 
     try:
-        _with_hw_fallback(build, lambda cmd: ff(cmd, (b - a) / pace, on_frac, cwd=out.parent))
+        _with_hw_fallback(build, lambda cmd: ff(cmd, n / FPS, on_frac, cwd=out.parent))
     finally:
         ass.unlink(missing_ok=True)
 
-def sound_filter(d, voice="off", pace=1.0):
-    """A part's audio filter for d seconds of source: the pace (atempo keeps the pitch), the
-    voice treatment (if any), then a short fade in and out, so there's no click where two
-    parts meet."""
-    d /= pace
+def sound_filter(frames, voice="off", pace=1.0):
+    """A part's audio filter for `frames` export frames of sound: the pace (atempo keeps the
+    pitch), the voice treatment (if any), a short fade in and out (no click where two parts
+    meet), then exactly frames * SR / FPS samples: padded with silence or cut, never longer
+    than the picture (a longer sound made the join hold the last frame before every cut)."""
+    d = frames / FPS
     fd = min(FADE, d / 4)
-    fades = f"afade=t=in:d={fd:.3f},afade=t=out:st={max(0.0, d - fd):.3f}:d={fd:.3f}"
-    chain = [f"atempo={pace:g}"] if pace != 1.0 else []
+    chain = ["asetpts=PTS-STARTPTS"] + ([f"atempo={pace:g}"] if pace != 1.0 else []) + [f"aresample={SR}"]
     chain += [VOICE_CHAINS[voice]] if voice in VOICE_CHAINS else []
-    return ",".join(chain + [fades])
+    chain += [f"afade=t=in:d={fd:.3f}", f"afade=t=out:st={max(0.0, d - fd):.4f}:d={fd:.3f}",
+              "apad", f"atrim=end_sample={frames * SR // FPS}"]
+    return ",".join(chain)
 
 def paced(chunks, pace):
     """Caption chunks moved onto a clip's sped-up clock."""
@@ -2365,7 +2402,8 @@ def chunks_within(chunks, o0, o1):
 def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=None, voice="off"):
     """A clip with cover: its picture stretch by stretch (its own picture, or a cover piece's,
     each fitted like any clip, the sound's captions burned across all of them), joined, then
-    the clip's own sound laid under it in one piece: cover never touches what's heard."""
+    the clip's own sound laid under it in one piece: cover never touches what's heard. out is
+    an intermediate part (.mov, PCM sound), exactly clip_frames(clip) frames long."""
     item = st["media"][clip["media"]]
     a, b, pace = clip["in"], clip["out"], clip_pace(clip)
     tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
@@ -2373,10 +2411,14 @@ def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=Non
         if with_captions else []
     spans = cover_spans(clip)
     total = sum(o1 - o0 for o0, o1, _ in spans) or 1
+    n = clip_frames(clip)
+    # every stretch is whole export frames (cover_spans puts the boundaries on them): the
+    # stretches add up to exactly the clip's frames
+    edges = [min(n, frames_of(o0 / pace) if o0 else 0) for o0, _, _ in spans] + [n]
     pics, done = [], 0.0
     try:
         for k, (o0, o1, p) in enumerate(spans):
-            pic = out.with_name(f"{out.stem}.pic{k:02d}.mp4")
+            pic = out.with_name(f"{out.stem}.pic{k:02d}.mov")
             src, s0 = (st["media"][p["media"]], max(0.0, cover_src(p, clip, o0))) if p else (item, a + o0)
             fit = (p.get("fit") if p and p.get("fit") in FITS else fit_default(src, aspect)) if p \
                 else clip_fit(clip, item, aspect)
@@ -2386,7 +2428,7 @@ def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=Non
             e0, e1 = o0 / pace, o1 / pace
             render_segment(src, s0, s0 + (o1 - o0) / (pace if p else 1), pic, aspect, with_captions,
                            prog, fit, chunks=chunks_within(chunks, e0, e1), audio=False,
-                           pace=1.0 if p else pace)
+                           pace=1.0 if p else pace, frames=edges[k + 1] - edges[k], part=True)
             pics.append(pic)
             done += o1 - o0
         lst = out.with_name(f"{out.stem}.pics.txt")
@@ -2397,11 +2439,10 @@ def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=Non
         if item["has_audio"]:
             amap = ["-map", "0:v:0", "-map", "1:a:0"]
         else:
-            cmd += ["-f", "lavfi", "-t", str(b - a), "-i", "anullsrc=r=48000:cl=stereo"]
+            cmd += ["-f", "lavfi", "-t", str(b - a), "-i", f"anullsrc=r={SR}:cl=stereo"]
             amap = ["-map", "0:v:0", "-map", "2:a:0"]
-        sh(cmd + [*amap, "-c:v", "copy", "-af", sound_filter(b - a, voice, pace), "-c:a", "aac",
-                  "-b:a", "160k", "-ar", "48000", "-ac", "2", "-shortest", "-movflags",
-                  "+faststart", out.name], cwd=out.parent)
+        sh(cmd + [*amap, "-c:v", "copy", "-frames:v", str(n), "-af", sound_filter(n, voice, pace),
+                  *part_audio(True), "-ar", str(SR), "-ac", "2", *NO_TMCD, out.name], cwd=out.parent)
     finally:
         for x in pics:
             x.unlink(missing_ok=True)
@@ -2654,7 +2695,7 @@ def _render_parts(slug, st, tl, work, stamp):
     def one(i):
         c = tl["clips"][i]
         item = st["media"][c["media"]]
-        out = work / f"part{i:03d}.mp4"
+        out = work / f"part{i:03d}.mov"
         spoken = bool(item.get("has_audio")) and clip_spoken(c, ensure_speech(c["media"]) or [])
         voice = clip_voice(c, tl, spoken)
         if any(p for _, _, p in cover_spans(c)):
@@ -2662,7 +2703,7 @@ def _render_parts(slug, st, tl, work, stamp):
         else:
             render_segment(item, c["in"], c["out"], out, tl["aspect"], tl["captions"],
                            on_frac=prog.part(i), fit=clip_fit(c, item, tl["aspect"]), voice=voice,
-                           pace=clip_pace(c))
+                           pace=clip_pace(c), frames=clip_frames(c), part=True)
         return out
     t0 = time.monotonic()
     _exporting[0] += 1
@@ -2673,31 +2714,49 @@ def _render_parts(slug, st, tl, work, stamp):
         _exporting[0] -= 1
     (work / "list.txt").write_text("".join(f"file '{p.name}'\n" for p in parts))
     # concat -c copy is only safe when every part has the same codec parameters (SPS/PPS);
-    # if a part ever differs (e.g. VideoToolbox fell back to its software encoder), re-encode.
+    # if a part ever differs (e.g. VideoToolbox fell back to its software encoder), re-encode,
+    # with a key frame at every part's first frame so no cut lands on a predicted frame.
     same = len({stream_sig(p) for p in parts}) == 1
     exports = pdir(slug) / "exports"
     exports.mkdir(exist_ok=True)
     final = exports / f"{slug}-{stamp}-{tl['aspect'].replace(':', 'x')}.mp4"
-    vcodec = ["-c:v", "copy"] if same else [*venc("export", 60), "-pix_fmt", "yuv420p"]
-    joined = work / "joined.mp4"
+    # half a frame early: the key frame goes on the first frame at or after each time
+    starts = [f"{max(0.0, x - 0.5) / FPS:.6f}"
+              for x in itertools.accumulate([0] + [clip_frames(c) for c in tl["clips"][:-1]])]
+    vcodec = ["-c:v", "copy"] if same else [*venc("export", 60), "-pix_fmt", "yuv420p",
+                                            "-force_key_frames", ",".join(starts)]
+    joined = work / "joined.mov"
     sh(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "list.txt",
-        *vcodec, "-c:a", "copy", str(joined)], cwd=work)
+        *vcodec, "-c:a", "copy", *NO_TMCD, str(joined)], cwd=work)
     loud = loudnorm(joined, final)
     return final, same, t0, loud
 
 def cut_list(tl):
-    """Every cut in a render, on the export's clock: {at, kind, clip}. kind "sound" is one clip
-    to the next (what's heard cuts); "picture" is a cover piece starting or ending inside a
-    clip (only the picture cuts; the sound runs on, so it's never judged as a speech cut).
-    clip: the 1-based clip the cut is in, or the one it leaves."""
-    out, t = [], 0.0
-    for k, c in enumerate(tl.get("clips", []), 1):
+    """Every cut in a render, on the export's clock: {at, frame, kind, clip, same}. kind
+    "sound" is one clip to the next (what's heard cuts); "picture" is a cover piece starting or
+    ending inside a clip (only the picture cuts; the sound runs on, so it's never judged as a
+    speech cut). clip: the 1-based clip the cut is in, or the one it leaves. frame: the export
+    frame the new picture starts on (every clip is whole frames). same: the same media's
+    picture either side, from different moments of it: a jump cut unless something hides it."""
+    def pic(c, o, left=False):   # (media, source second) of the picture at clip time o, or
+        spans = cover_spans(c)    # just before it (left)
+        p = next((x[2] for x in spans if (x[0] < o <= x[1] if left else x[0] <= o < x[1])), None)
+        return (p["media"], cover_src(p, c, o)) if p else (c["media"], c["in"] + o)
+    def same(l, r):              # different moments (more than a frame apart) of one media
+        return l[0] == r[0] and abs(l[1] - r[1]) > 1.5 / FPS
+    out, f = [], 0
+    clips = tl.get("clips", [])
+    for k, c in enumerate(clips, 1):
         if k > 1:
-            out.append({"at": round(t, 3), "kind": "sound", "clip": k - 1})
+            prev = clips[k - 2]
+            out.append({"at": round(f / FPS, 3), "frame": f, "kind": "sound", "clip": k - 1,
+                        "same": same(pic(prev, prev["out"] - prev["in"], True), pic(c, 0.0))})
         if c.get("cover"):
-            out += [{"at": round(t + o0 / clip_pace(c), 3), "kind": "picture", "clip": k}
-                    for o0, _, _ in cover_spans(c)[1:]]
-        t += clip_len(c)
+            for o0, _, _ in cover_spans(c)[1:]:
+                g = f + frames_of(o0 / clip_pace(c))
+                out.append({"at": round(g / FPS, 3), "frame": g, "kind": "picture", "clip": k,
+                            "same": same(pic(c, o0, True), pic(c, o0))})
+        f += clip_frames(c)
     return out
 
 LOUD_I, LOUD_TP, LOUD_LRA = -14.0, -1.0, 11.0     # QUALITY.md: -14 LUFS, true peak <= -1 dBTP
@@ -2717,7 +2776,8 @@ def loudnorm(src, out):
     except ValueError:
         ok = False
     if not ok:                         # silence (or unmeasurable): nothing to normalize
-        sh(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c", "copy", "-movflags", "+faststart", str(out)])
+        sh(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy",
+            "-ar", str(SR), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)])
         return {"input_i": meas.get("input_i"), "normalized": False}
     af = (f"loudnorm={target}:measured_I={meas['input_i']}:measured_TP={meas['input_tp']}"
           f":measured_LRA={meas['input_lra']}:measured_thresh={meas['input_thresh']}"
@@ -2747,7 +2807,7 @@ def render(slug, actor="cli"):
         final, same, t0, loud = _render_parts(slug, st, tl, work, stamp)
     finally:                           # a failed export leaves no parts behind
         shutil.rmtree(work, ignore_errors=True)
-    dur = sum(clip_len(c) for c in tl["clips"])
+    dur = sum(clip_frames(c) for c in tl["clips"]) / FPS
     rel = str(final.relative_to(HOME))
     emit("render.done", None, project=slug, file=rel, duration=round(dur, 2),
          aspect=tl["aspect"], clips=len(tl["clips"]), sha256=receipt(final), actor=actor,
@@ -2811,17 +2871,207 @@ def measure_loudness(path):
     f = lambda m: float(m.group(1)) if m and m.group(1) != "-inf" else None
     return f(i), f(tp)
 
-def detect_black_freeze(path):
-    """([(start, end)] black, [(start, end)] frozen) in the export, by blackdetect/freezedetect
-    on a small copy of the picture."""
-    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path), "-an", "-vf",
-                        f"scale=-2:320,blackdetect=d=0.1:pix_th=0.10,freezedetect=n=-60dB:d={CHECK_FREEZE}",
-                        "-f", "null", "-"], capture_output=True, text=True)
+# What the rendered cuts look and sound like (`check`'s cut rules), calibrated on four real
+# reels on 2026-11-09 (athanor projects/studio/tools/flash-detect.py has the calibration notes).
+CUT_SCENE = 0.30     # a picture cut: the masked scene score is at least this
+CUT_AGAIN = 0.20     # another change this big within CUT_WINDOW frames of a cut: a flash
+CUT_WINDOW = 3
+CUT_MASK = 0.45      # the bottom of the frame (where captions are) is left out of the scene score
+CUT_MATCH = 3        # a timeline cut is looked for this many frames either side of where it's due
+STRAY_NEAR = 15      # a picture change this close to a cut that isn't the cut is stray; one
+                     #   farther from every cut is the footage's own (a whip pan, a cartoon's edit)
+JUMP_LO = 0.04       # the same media either side of a cut, and the picture changed this much
+SOFT_STEP, SOFT_STILL = 0.10, 0.03   # first frame after a cut differs, the next one doesn't
+POP_LUMA = (16, 239)                 # a frame darker / brighter than this between two that aren't
+FRAG_DB = 18.0       # sound within 30 ms of a sound cut this far over the reel's floor: a fragment
+CLICK_RATIO, CLICK_MIN = 6.0, 0.02   # a sample step at the junction this many times the steps
+                                     #   around it (and at least this, full scale): a click
+CUT_RULES = {        # rule: (what passing means, hard)
+    "flash": ("no stray frames at a cut", True),
+    "stray": ("every picture cut is in the timeline", True),
+    "pop": ("no one-frame black or white pops", True),
+    "jump": ("no jump cut (the same shot either side of a cut, nothing hiding it)", True),
+    "fragment": ("no clipped word or breath at a sound cut", True),
+    "click": ("no click at a cut", True),
+    "held": (f"every frame on the {FPS} fps grid (none held at a cut)", True),
+    "soft": ("a clean first frame after every cut", False),
+}
+
+def scan_picture(path):
+    """One decode of the export's picture. Returns (black, frozen, frames): the [(start, end)]
+    black and frozen stretches (blackdetect, freezedetect on a small copy), and per frame
+    (pts, scene, luma): the scene-change score with the caption band masked off, and the
+    frame's mean luma (0-255)."""
+    g = (f"[0:v]split[a][b];"
+         f"[a]scale=-2:320,blackdetect=d=0.1:pix_th=0.10,freezedetect=n=-60dB:d={CHECK_FREEZE}[o1];"
+         f"[b]scale=360:-2,signalstats,crop=iw:ih*{1 - CUT_MASK:.3f}:0:0,select='gte(scene,0)',"
+         f"metadata=print:file=frames.txt[o2]")
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(Path(path).resolve()), "-an",
+                            "-filter_complex", g, "-map", "[o1]", "-f", "null", "-",
+                            "-map", "[o2]", "-f", "null", "-"], capture_output=True, text=True, cwd=td)
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed ({r.returncode}):\n{r.stderr[-1500:]}")
+        meta = (Path(td) / "frames.txt").read_text()
+    frames = []
+    for block in re.split(r"(?m)^(?=frame:)", meta):
+        m = re.match(r"frame:\d+\s+pts:\S+\s+pts_time:(\S+)", block)
+        if m:
+            kv = dict(re.findall(r"lavfi\.([\w.]+)=(\S+)", block))
+            frames.append((float(m.group(1)), float(kv.get("scene_score", 0)),
+                           float(kv.get("signalstats.YAVG", 0))))
+    frames.sort()
     black = [(float(a), float(b)) for a, b in re.findall(r"black_start:([\d.]+) black_end:([\d.]+)", r.stderr)]
     fs = [float(x) for x in re.findall(r"freeze_start: ([\d.]+)", r.stderr)]
     fe = [float(x) for x in re.findall(r"freeze_end: ([\d.]+)", r.stderr)]
     dur = probe(path)["duration"]
-    return black, [(a, fe[k] if k < len(fe) else dur) for k, a in enumerate(fs)]
+    return black, [(a, fe[k] if k < len(fe) else dur) for k, a in enumerate(fs)], frames
+
+def wav_pcm(wav):
+    """A 16-bit mono WAV's samples (array of ints) and its rate."""
+    import array, wave
+    with wave.open(str(wav)) as w:
+        return array.array("h", w.readframes(w.getnframes())), w.getframerate()
+
+def cut_findings(frames, cuts=None, samples=None, sr=16000):
+    """The cuts as rendered. frames: scan_picture's (pts, scene, luma) per frame; cuts:
+    cut_list's (frame, kind, same, and for sound/pause cuts `spoken`: (left, right), whether
+    the clip either side is speech); samples: the export's sound, 16-bit mono at sr. Without
+    cuts only flash, pop and held are looked for. Returns [{rule, frame, time, detail, cut}],
+    cut: the index in cuts the finding is at (or None)."""
+    n = len(frames)
+    pts = [f[0] for f in frames]
+    scene = [f[1] for f in frames]
+    luma = [f[2] for f in frames]
+    out = []
+    def add(rule, f, detail, cut=None):
+        out.append({"rule": rule, "frame": f, "time": round(pts[min(f, n - 1)], 3), "detail": detail, "cut": cut})
+    if n < 2:
+        return out
+    changes = [f for f in range(1, n) if scene[f] >= CUT_SCENE]
+
+    # flash: a cut followed by another within CUT_WINDOW frames; the frames between are nobody's
+    in_flash = set()
+    for f in changes:
+        if f in in_flash:
+            continue
+        end, g = None, f
+        while True:
+            h = next((h for h in range(g + 1, min(n, g + CUT_WINDOW + 1)) if scene[h] >= CUT_AGAIN), None)
+            if h is None:
+                break
+            end = g = h
+            in_flash.add(h)
+        if end is not None:
+            in_flash.add(f)
+            add("flash", f, f"{end - f} frame{'s' if end - f != 1 else ''} ({f}-{end - 1}) belong to "
+                            f"neither shot: a cut at frame {f}, another at {end}")
+
+    # the timeline's cuts, found in the picture in order: each where the previous one was found
+    # plus the frames between them (never drifting), the strongest change near there
+    due, found = {}, {}
+    if cuts:
+        cand = [f for f in range(1, n) if scene[f] >= JUMP_LO]
+        prev_c, prev_f = 0, 0
+        for i, c in enumerate(cuts):
+            pred = prev_f + c["frame"] - prev_c
+            due[i] = pred
+            near = [f for f in cand if abs(f - pred) <= CUT_MATCH and f not in found.values()]
+            if near:
+                strong = [f for f in near if scene[f] >= CUT_SCENE]
+                # a caption appearing the frame after a cut scores 0.1-0.3: the strongest wins
+                f = max(strong or near, key=lambda x: (scene[x], -abs(x - pred)))
+                found[i], prev_f = f, f
+            else:
+                prev_f = pred                  # nothing to see (a pause cut in one shot)
+            prev_c = c["frame"]
+        for f in changes:
+            if f in found.values() or f in in_flash:
+                continue
+            i, d = min(((i, f - due[i]) for i in due), key=lambda x: abs(x[1]))
+            if abs(d) <= STRAY_NEAR:
+                add("stray", f, f"a picture change {abs(d)} frame{'s' if abs(d) != 1 else ''} "
+                                f"{'after' if d > 0 else 'before'} the cut at {cuts[i]['at']:.2f}s, "
+                                f"that isn't in the timeline: picture from past the clip's edge, or a "
+                                f"cut that landed off its frame")
+        for i, f in found.items():
+            c, sc = cuts[i], scene[f]
+            # a jump cut needs the timeline: the same media's picture either side, from another
+            # moment. Pixel scores alone can't tell: real shot changes in one yard score 0.15-0.31
+            if c.get("same") and sc >= JUMP_LO:
+                add("jump", f, f"the same shot either side of the cut (change {sc:.2f}) and nothing "
+                               f"hides it: cover it, punch in, or cut elsewhere", i)
+            if f + 2 < n and scene[f + 1] >= SOFT_STEP and scene[f + 2] < SOFT_STILL:
+                add("soft", f + 1, f"the first frame after the cut differs from the next by "
+                                   f"{scene[f + 1]:.2f} while the shot is still (a predicted frame)", i)
+
+    # one-frame pops to black or white
+    lo, hi = POP_LUMA
+    for f in range(1, n - 1):
+        y, a, b = luma[f], luma[f - 1], luma[f + 1]
+        if (y < lo and a >= lo and b >= lo) or (y > hi and a <= hi and b <= hi):
+            add("pop", f, f"one {'black' if y < lo else 'white'} frame (mean luma {y:.0f} between "
+                          f"{a:.0f} and {b:.0f})")
+
+    # held frames: a frame shown for longer (or shorter) than one frame
+    step = 1 / FPS
+    for f in range(1, n):
+        d = pts[f] - pts[f - 1]
+        if abs(d - step) > 0.1 * step:
+            add("held", f - 1, f"frame {f - 1} shows for {d * 1000:.0f} ms ({d / step:.2f} frames)")
+
+    # the sound at every sound cut: a clipped word (fragment) or a click
+    if cuts and samples:
+        s = samples
+        sq = list(itertools.accumulate((v * v for v in s), initial=0))
+        def db(a, b):
+            a, b = max(0, a), min(len(s), b)
+            if b <= a:
+                return -120.0
+            return 20 * math.log10(max(1e-9, math.sqrt((sq[b] - sq[a]) / (b - a)) / 32768))
+        hop = sr // 100
+        env = sorted(v for v in (db(i, i + hop) for i in range(0, len(s) - hop, hop)) if v > -90)
+        floor = env[len(env) // 20] if env else -60.0
+        w4, w30, w2, w5 = int(sr * 0.004), int(sr * 0.03), int(sr * 0.002), int(sr * 0.005)
+        def steps(a, b):
+            return max((abs(s[k] - s[k - 1]) for k in range(max(1, a), min(len(s), b))), default=0) / 32768
+        for i, c in enumerate(cuts):
+            if c["kind"] not in ("sound", "pause"):
+                continue
+            left, right = c.get("spoken", (True, True))
+            # the junction is where the picture cut landed; the quietest 4 ms within 40 ms of it
+            # (the fades) is the join itself
+            f = found.get(i, due.get(i, 0))
+            i0 = int(pts[min(f, n - 1)] * sr)
+            lo_, hi_ = max(w4, i0 - int(sr * 0.04)), min(len(s) - w4, i0 + int(sr * 0.04))
+            if hi_ <= lo_:
+                continue
+            j = min(range(lo_, hi_, max(1, w4 // 2)), key=lambda k: db(k - w4 // 2, k + w4 // 2))
+            before, after = db(j - w30, j), db(j, j + w30)
+            loud = [(side, v) for side, v, on in (("before", before, left), ("after", after, right))
+                    if on and v >= floor + FRAG_DB]
+            if loud:
+                side, v = max(loud, key=lambda x: x[1])
+                add("fragment", f, f"speech-level sound {side} the cut at {j / sr:.3f}s ({v:.0f} dBFS, "
+                                   f"floor {floor:.0f}): a clipped word or breath, or too short a "
+                                   f"{'tail' if side == 'before' else 'lead-in'}", i)
+            peak = steps(j - w2, j + w2)
+            ref = sorted(steps(k, k + w5) for k in range(j - int(sr * 0.2), j + int(sr * 0.2), w5)
+                         if abs(k - j) >= w5 and k >= 1 and k + w5 < len(s))
+            med = ref[len(ref) // 2] if ref else 1.0
+            if peak >= CLICK_MIN and peak >= CLICK_RATIO * med:
+                add("click", f, f"a sample step of {peak:.3f} at {j / sr:.3f}s, {peak / max(med, 1e-6):.0f}x "
+                                f"the steps around it: a click", i)
+    out.sort(key=lambda x: (x["frame"], x["rule"]))
+    return out
+
+def cut_tile(path, frame, out):
+    """Nine frames of an export around one frame (4 before, 4 after), numbered: the review
+    sheet's picture of a cut finding."""
+    a = max(0, frame - 4)
+    label = f"drawtext={_font()}text='%{{eif\\:n+{a}\\:d}}':x=6:y=6:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.6,"
+    sh(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(0.0, a / FPS - 0.5 / FPS):.4f}", "-i", str(path),
+        "-vf", f"scale=216:-2,{label}tile=9x1", "-frames:v", "1", str(out)])
 
 def _words_of(text):
     return [w for w in (re.sub(r"[^a-z0-9]+", "", x.lower()) for x in text.split()) if w]
@@ -2866,13 +3116,14 @@ def check(slug, path=None, actor="cli"):
                       "detail": detail, "_items": items})
 
     # where the cuts are, on the export's clock, and the speech each clip cuts
-    clips, t = [], 0.0
+    clips, f = [], 0
     for c in (tl or {}).get("clips", []):
         it = st["media"].get(c["media"], {})
         regs = (ensure_speech(c["media"]) if it.get("has_audio") else []) or []
-        clips.append({**c, "at": t, "end": t + clip_len(c), "name": it.get("name"), "regions": regs,
-                      "pace": clip_pace(c), "spoken": bool(it.get("has_audio")) and clip_spoken(c, regs)})
-        t += clip_len(c)
+        clips.append({**c, "at": f / FPS, "end": (f + clip_frames(c)) / FPS, "name": it.get("name"),
+                      "regions": regs, "pace": clip_pace(c),
+                      "spoken": bool(it.get("has_audio")) and clip_spoken(c, regs)})
+        f += clip_frames(c)
     clip_at = lambda x: next((c for c in reversed(clips) if c["at"] <= x + 1e-6), None)
     cid = lambda x: (c := clip_at(x)) and c["id"]
     # a clip nobody speaks in (b-roll, a cartoon, a card) is picture: its time is never a pause
@@ -2933,6 +3184,7 @@ def check(slug, path=None, actor="cli"):
 
     # 2-3. the export's own speech: first word (or declared on-screen text), pauses
     wav = export_wav(final, out_dir / ".audio.wav")
+    samples, sr = wav_pcm(wav)
     heard_regions = vad_regions(wav)
     inside = lambda r: any(a - 0.05 <= r[0] and r[1] <= b + 0.05 for a, b in picture_only)
     talk = [r for r in heard_regions if not inside(r)]
@@ -2975,10 +3227,31 @@ def check(slug, path=None, actor="cli"):
                              f"(want {LOUD_I:g} +-1 LUFS, <= {LOUD_TP:g} dBTP)")
 
     # 6. black / frozen picture
-    black, frozen = detect_black_freeze(final)
+    black, frozen, frames = scan_picture(final)
     bad = [(f"black {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in black] + \
           [(f"frozen {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in frozen]
     rule("picture", not bad, "no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}", bad)
+
+    # 7. the cuts as rendered: stray frames, jump cuts, clipped words, clicks, held frames.
+    # Each finding names the clip it's in (at a cut: the clip the cut goes into).
+    for x in cuts:
+        if x["kind"] in ("sound", "pause"):
+            x["spoken"] = (clips[x["clip"] - 1]["spoken"], clips[x["clip"]]["spoken"])
+    found = cut_findings(frames, cuts if tl else None, samples, sr)
+    into = lambda x: clips[x["clip"] if x["kind"] != "picture" else x["clip"] - 1]["id"]
+    tiles = []
+    for name, (passing, hard) in CUT_RULES.items():
+        if not tl and name in ("stray", "jump", "soft", "fragment", "click"):
+            rule(name, "skip", "not a studio render: no cut list")
+            continue
+        hits = [x for x in found if x["rule"] == name]
+        if hard and name != "held":
+            tiles += hits
+        items = [(f"{x['time']:.2f}s (frame {x['frame']}): {x['detail']}",
+                  into(cuts[x["cut"]]) if x["cut"] is not None else cid(x["time"])) for x in hits]
+        at = ", ".join(f"{x['time']:.2f}s" for x in hits[:6]) + (", ..." if len(hits) > 6 else "")
+        rule(name, ("fail" if hard else "warn") if hits else "pass",
+             f"{len(hits)} at {at} (want: {passing})" if hits else passing, items)
 
     # 7-8. captions against what the export actually says; the last word
     brand = (st["projects"].get(slug) or {}).get("brand") or "jefe"
@@ -3029,6 +3302,13 @@ def check(slug, path=None, actor="cli"):
             sheets.append(name)
         except RuntimeError as e:
             print(f"    review sheet {name} failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
+    for x in tiles:                    # nine frames around every cut finding
+        name = f"{x['rule']}-f{x['frame']:05d}.png"
+        try:
+            cut_tile(final, x["frame"], out_dir / name)
+            sheets.append(name)
+        except RuntimeError as e:
+            print(f"    review tile {name} failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
     try:
         contact_sheet(final, out_dir / "contact.png", dur)
         sheets.append("contact.png")

@@ -1499,18 +1499,18 @@ class Quality(unittest.TestCase):
         slug = self.render_clip("Moving target", 0.5, 3.0)
         f = self.home / self.S.state()["projects"][slug]["exports"][-1]["file"]
         n = sum(e["type"] == "check.done" for e in H.events(self.home))
-        orig = self.S.detect_black_freeze
+        orig = self.S.scan_picture
         def tamper(path):
             out = orig(path)
             with open(f, "ab") as fh:
                 fh.write(b"\0")
             return out
-        self.S.detect_black_freeze = tamper
+        self.S.scan_picture = tamper
         try:
             with self.assertRaisesRegex(RuntimeError, "changed while it was being checked"):
                 self.S.check(slug)
         finally:
-            self.S.detect_black_freeze = orig
+            self.S.scan_picture = orig
         self.assertEqual(sum(e["type"] == "check.done" for e in H.events(self.home)), n, "no record")
 
     # ---- choice ----
@@ -1711,14 +1711,30 @@ class Cover(unittest.TestCase):
         c = old["clips"][0]
         self.assertEqual(self.S.cut_list(old), [])
         self.assertEqual(self.S.cover_spans(c), [(0.0, 3.4, None)])
-        # no voice, no pace: the filter is the fades alone, the picture has no setpts
-        self.assertEqual(self.S.sound_filter(3.4, "off"), "afade=t=in:d=0.020,afade=t=out:st=3.380:d=0.020")
+        # no voice, no pace: the fades, and exactly the clip's frames of sound (102 frames x 1600)
+        self.assertEqual(self.S.sound_filter(102, "off"),
+                         "asetpts=PTS-STARTPTS,aresample=48000,afade=t=in:d=0.020,"
+                         "afade=t=out:st=3.3800:d=0.020,apad,atrim=end_sample=163200")
         # a cover piece pointing at missing footage is dropped with a warning, never the clip
         probs = []
         tl = self.S.normalize_timeline({**old, "clips": [{**c, "cover": [{"media": "nope", "in": 0, "out": 1, "at": 1}]}]},
                                        lib, probs)
         self.assertNotIn("cover", tl["clips"][0])
         self.assertEqual([k for k, _ in probs], ["cover"])
+
+    def test_cover_spans_fold_a_sliver_at_the_start(self):
+        """A cover starting a frame or two into the clip: the sliver of the clip's own picture
+        before it is folded into the cover (it used to crash with two stretches, and with three
+        it stretched the last one back to 0)."""
+        p = {"media": self.r, "in": 0.0, "out": 1.0, "at": 0.05}
+        two = self.S.cover_spans({"id": "x", "media": self.b, "in": 0.0, "out": 1.05, "cover": [p]})
+        self.assertEqual([(a, x is not None) for a, _, x in two], [(0.0, True)])
+        self.assertEqual(two[0][1], 1.05)
+        three = self.S.cover_spans({"id": "x", "media": self.b, "in": 0.0, "out": 3.4, "cover": [p]})
+        self.assertEqual([x is not None for _, _, x in three], [True, False])
+        self.assertEqual(three[0][0], 0.0)
+        self.assertEqual(three[0][1], three[1][0], "end to end")
+        self.assertEqual(three[1][1], 3.4)
 
     def test_bundle_carries_cover_footage(self):
         slug = self.project("Bundled", captions="off")
@@ -1829,7 +1845,10 @@ class Cover(unittest.TestCase):
         f1, ev = self.render(slug)
         want = sum((c["out"] - c["in"]) / 1.1 for c in self.tl(slug)["clips"])
         self.assertAlmostEqual(H.ffprobe(f1)["duration"], want, delta=0.12)
-        self.assertAlmostEqual(ev["duration"], want, delta=0.01)
+        # each clip is a whole number of frames: within half a frame of its length on that clock
+        frames = [self.S.clip_frames(c) for c in self.tl(slug)["clips"]]
+        self.assertAlmostEqual(sum(frames) / 30, want, delta=len(frames) / 60)
+        self.assertEqual(ev["duration"], round(sum(frames) / 30, 2))
         self.assertEqual([x["at"] for x in ev["cuts"] if x["kind"] == "picture"][0], 1.0,
                          "a cover piece's place is on the sped-up clock")
         res, r = self.check(slug)
@@ -1938,6 +1957,275 @@ class Agents(unittest.TestCase):
         r = H.cli(self.home, "agent", check=False, env=H.env_for(self.home, STUDIO_AGENT="aider"))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("STUDIO_AGENT_CMD", r.stderr)
+
+
+class CutRules(unittest.TestCase):
+    """check's cut rules (cut_findings) on made-up frames and sound: what each one catches and
+    what it lets through. No ffmpeg."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = H.import_studio(H.new_home("cutrules"))
+
+    def frames(self, n=90):
+        return [[k / 30, 0.001, 100.0] for k in range(n)]
+
+    def cut(self, frame, kind="picture", same=False, clip=1, spoken=(True, True)):
+        return {"at": round(frame / 30, 3), "frame": frame, "kind": kind, "clip": clip, "same": same,
+                "spoken": spoken}
+
+    def rules(self, frames, cuts=None, samples=None):
+        return [(x["rule"], x["frame"]) for x in self.S.cut_findings([tuple(f) for f in frames], cuts, samples)]
+
+    def test_a_clean_cut_passes(self):
+        fr = self.frames()
+        fr[30][1] = 0.6
+        fr[31][1] = 0.15        # a little change the frame after (under CUT_AGAIN): not a second cut
+        fr[32][1] = 0.05        # (a moving shot: the frame after the caption isn't still)
+        self.assertEqual(self.rules(fr, [self.cut(30)]), [])
+
+    def test_flash_two_frames_between_two_cuts(self):
+        fr = self.frames()
+        fr[30][1], fr[32][1] = 0.6, 0.5
+        self.assertEqual(self.rules(fr, [self.cut(30)]), [("flash", 30)])
+        self.assertEqual(self.rules(fr), [("flash", 30)], "no cut list needed")
+
+    def test_stray_near_a_cut_but_not_far_from_every_cut(self):
+        fr = self.frames()
+        fr[30][1] = fr[40][1] = fr[80][1] = 0.6
+        self.assertEqual(self.rules(fr, [self.cut(30)]), [("stray", 40)],
+                         "10 frames from a cut is stray; 50 is the footage's own change")
+
+    def test_cuts_are_found_a_few_frames_off(self):
+        fr = self.frames()
+        fr[32][1] = fr[62][1] = 0.6
+        self.assertEqual(self.rules(fr, [self.cut(30), self.cut(60)]), [])
+
+    def test_jump_needs_the_same_media_either_side(self):
+        fr = self.frames()
+        fr[30][1] = 0.12
+        self.assertEqual(self.rules(fr, [self.cut(30, "sound", same=True)]), [("jump", 30)])
+        self.assertEqual(self.rules(fr, [self.cut(30, "sound", same=False)]), [])
+
+    def test_soft_first_frame(self):
+        fr = self.frames()
+        fr[30][1], fr[31][1], fr[32][1] = 0.6, 0.15, 0.01
+        self.assertEqual(self.rules(fr, [self.cut(30)]), [("soft", 31)])
+
+    def test_one_frame_pops_not_two(self):
+        fr = self.frames()
+        fr[20][2] = 4.0
+        fr[50][2] = fr[51][2] = 4.0
+        fr[70][2] = 250.0
+        self.assertEqual(self.rules(fr), [("pop", 20), ("pop", 70)])
+
+    def test_held_frame(self):
+        fr = self.frames()
+        for f in fr[60:]:
+            f[0] += 2 / 30      # frame 59 shows for three frames
+        self.assertEqual(self.rules(fr), [("held", 59)])
+
+    def sine(self, n, amp, hz=180, sr=16000):
+        import math
+        return [int(amp * math.sin(2 * math.pi * hz * k / sr)) for k in range(n)]
+
+    def test_fragment_a_word_cut_either_side(self):
+        import array
+        import random
+        rnd = random.Random(1)
+        sr, i0 = 16000, 16000          # the cut at 1.0 s = frame 30
+        s = [rnd.randint(-30, 30) for _ in range(3 * sr)]       # room tone
+        for k, v in enumerate(self.sine(sr, 8000)):              # a word from 0.5 to 1.5 s, cut at 1.0
+            s[sr // 2 + k] += v
+        for k in range(i0 - 320, i0 + 320):   # 20 ms fades either side of the join
+            s[k] = int(s[k] * abs(k - i0) / 320)
+        s = array.array("h", s)
+        fr = self.frames()
+        fr[30][1] = 0.6
+        self.assertEqual(self.rules(fr, [self.cut(30, "sound")], s), [("fragment", 30)])
+        # loud sound in a clip nobody speaks in (grinder, music) is that clip's, not a word
+        self.assertEqual(self.rules(fr, [self.cut(30, "sound", spoken=(False, False))], s), [])
+        self.assertEqual(self.rules(fr, [self.cut(30, "picture")], s), [], "the sound runs on at a picture cut")
+
+    def test_click_at_the_join(self):
+        import array
+        sr, i0 = 16000, 16000
+        s = self.sine(3 * sr, 8000, hz=100)
+        for k in range(i0 - 320, i0 + 320):
+            s[k] = int(s[k] * abs(k - i0) / 320)
+        s[i0] = 4000                    # one sample jumps out of the fade: a click
+        s = array.array("h", s)
+        fr = self.frames()
+        fr[30][1] = 0.6
+        self.assertIn(("click", 30), self.rules(fr, [self.cut(30, "sound", spoken=(False, False))], s))
+
+
+@unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")
+class Exact(unittest.TestCase):
+    """Frame-exact renders. dji.mov carries a timecode (tmcd) track like the DJI footage and
+    runs at 29.97; derived.mp4 is footage made outside the studio (no timecode). Both have a
+    moving picture so every cut is visible: a white band sliding down (dji) and a yellow box
+    sliding right (derived)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+        cls.fx = H.fixtures()
+        cls.home = H.new_home("exact")
+        work = H.new_home("exact-src")
+        ff = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+        enc = ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"]
+        subprocess.run(ff + ["-i", str(cls.fx / "bursts.mov"), "-filter_complex",
+                             "testsrc2=s=1080x1920:r=30000/1001:d=12[a];color=white:s=1080x300:r=30000/1001:d=12[b];"
+                             "[a][b]overlay=x=0:y='t*60'[v]", "-map", "[v]", "-map", "0:a", *enc,
+                             "-timecode", "00:00:00;00", str(work / "dji.mov")], check=True)
+        subprocess.run(ff + ["-i", str(cls.fx / "broll-roomtone.mov"), "-filter_complex",
+                             "color=c=0x3060a0:s=1080x1920:r=30000/1001:d=6[a];color=yellow:s=180x180:r=30000/1001:d=6[b];"
+                             "[a][b]overlay=x='t*150':y=300[v]", "-map", "[v]", "-map", "0:a", *enc,
+                             str(work / "derived.mp4")], check=True)
+        streams = [x["codec_type"] for x in json.loads(subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(work / "dji.mov")],
+            capture_output=True, text=True, check=True).stdout)["streams"]]
+        assert "data" in streams, "the DJI stand-in needs its timecode track"
+        H.cli(cls.home, "ingest", "-p", "x", settled(work / "dji.mov"), settled(work / "derived.mp4"))
+        cls.S = H.import_studio(cls.home)
+        ids = {it["name"]: m for m, it in cls.S.state()["media"].items()}
+        cls.d, cls.r = ids["dji.mov"], ids["derived.mp4"]
+
+    def setUp(self):
+        self.S.HOME = self.home
+
+    def av(self, path):
+        """(frame times, sound samples per channel, stream types) of a file."""
+        import subprocess
+        pts = [float(x.strip(",")) for x in subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time", "-of", "csv=p=0",
+             str(path)], capture_output=True, text=True, check=True).stdout.split() if x.strip(",")]
+        raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-f", "s16le", "-ac", "2",
+                              "-ar", "48000", "-"], capture_output=True, check=True).stdout
+        types = [x["codec_type"] for x in json.loads(subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(path)],
+            capture_output=True, text=True, check=True).stdout)["streams"]]
+        return pts, len(raw) // 4, types
+
+    def assert_on_grid(self, pts, n, what):
+        self.assertEqual(len(pts), n, f"{what}: {len(pts)} frames, want {n}")
+        self.assertAlmostEqual(pts[0], 0.0, delta=1e-3, msg=f"{what}: first frame at {pts[0]}")
+        for k, (a, b) in enumerate(zip(pts, pts[1:])):
+            self.assertAlmostEqual(b - a, 1 / 30, delta=1e-3, msg=f"{what}: frame {k} held for {b - a:.4f}s")
+
+    def test_parts_are_whole_frames_of_picture_and_sound(self):
+        st = self.S.state()
+        out = Path(tempfile.mkdtemp(dir=H.tmp_root()))
+        cases = [(self.d, 0.62, 4.13, 1.0), (self.d, 5.0, 8.5, 1.1), (self.r, 1.017, 3.3, 1.0), (self.d, 0.0, 0.07, 1.0)]
+        for k, (mid, a, b, pace) in enumerate(cases):
+            n = self.S.frames_of((b - a) / pace)
+            f = out / f"part{k}.mov"
+            self.S.render_segment(st["media"][mid], a, b, f, pace=pace, frames=n, part=True)
+            pts, samples, types = self.av(f)
+            self.assert_on_grid(pts, n, f"part {k}")
+            self.assertEqual(samples, n * 1600, f"part {k}: sound is exactly as long as the picture")
+            self.assertEqual(types, ["video", "audio"], f"part {k}: no timecode track")
+        clip = {"id": "c1", "media": self.d, "in": 0.62, "out": 4.13, "pace": 1.1,
+                "cover": [{"media": self.r, "in": 2.0, "out": 3.0, "at": 1.3}]}
+        f = out / "covered.mov"
+        self.S.render_covered(st, clip, f)
+        pts, samples, types = self.av(f)
+        n = self.S.clip_frames(clip)
+        self.assert_on_grid(pts, n, "covered part")
+        self.assertEqual(samples, n * 1600)
+        self.assertEqual(types, ["video", "audio"])
+
+    def story(self, name):
+        slug = H.cli(self.home, "project", "new", name).stdout.strip().splitlines()[-1]
+        for args in ((self.d, 0.62, 4.13), (self.r, 1.017, 3.3), (self.d, 5.0, 8.5), (self.d, 9.1, 11.95)):
+            H.cli(self.home, "timeline", "add", slug, *args)
+        H.cli(self.home, "timeline", "pace", slug, "3", "1.1")
+        c4 = self.S.state()["projects"][slug]["timeline"]["clips"][3]["id"]
+        H.cli(self.home, "timeline", "cover", slug, c4, "--with", self.r, 2.0, 3.0, "--at", 0.5)
+        return slug, c4
+
+    def render(self, slug):
+        H.cli(self.home, "render", slug, timeout=900)
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]
+        return self.home / ev["data"]["file"], ev["data"]
+
+    def check(self, slug):
+        r = H.cli(self.home, "check", slug, "--json", check=False, timeout=900)
+        self.assertIn(r.returncode, (0, 1), r.stderr[-2000:])
+        res = json.loads(r.stdout)
+        return res, {x["rule"]: x for x in res["rules"]}
+
+    def test_mixed_sources_join_losslessly_on_their_frames(self):
+        slug, c4 = self.story("Mixed")
+        f, ev = self.render(slug)
+        self.assertEqual(ev["concat"], "copy", "timecode on some sources must not force a re-encode")
+        tl = ev["timeline"]
+        n = sum(self.S.clip_frames(c) for c in tl["clips"])
+        self.assertEqual(ev["duration"], round(n / 30, 2))
+        pts, samples, types = self.av(f)
+        self.assertEqual(types, ["video", "audio"], "no timecode track in the export")
+        self.assert_on_grid(pts, n, "export")
+        self.assertAlmostEqual(samples / 48000, n / 30, delta=0.03, msg="sound as long as the picture")
+        # every cut is exactly on its frame: the picture changes there and nowhere near it
+        _, _, frames = self.S.scan_picture(f)
+        cuts = self.S.cut_list(tl)
+        self.assertEqual([(x["kind"], x["same"]) for x in cuts],
+                         [("sound", False), ("sound", False), ("sound", True), ("picture", False), ("picture", False)])
+        for x in cuts:
+            k = x["frame"]
+            scores = [round(frames[i][1], 3) for i in range(k - 2, k + 3)]
+            if not x["same"]:
+                self.assertGreaterEqual(scores[2], 0.3, f"no cut on frame {k}: {scores}")
+            self.assertTrue(all(s < 0.1 for s in scores[:2] + scores[3:]), f"around frame {k}: {scores}")
+        res, r = self.check(slug)
+        for k in ("flash", "stray", "pop", "held", "soft", "fragment", "click"):
+            self.assertEqual(r[k]["status"], "pass", r[k])
+        # the 3 -> 4 cut is the same shot, 0.6 s later: a jump cut, on clip 4
+        self.assertEqual(r["jump"]["status"], "fail", r["jump"])
+        self.assertEqual(len(r["jump"]["items"]), 1)
+        self.assertIn(f"{cuts[2]['at']:.2f}s", r["jump"]["items"][0])
+        self.assertIn("jump", res["failed"])
+        fails = [e for e in H.events(self.home) if e["type"] == "check.done"][-1]["data"]["failures"]
+        self.assertEqual([x["clip"] for x in fails if x["rule"] == "jump"], [c4])
+        self.assertTrue(any(i.startswith("jump-f") for i in res["images"]), "a tile of the jump on the sheet")
+        # a jump cut can be meant: excepted on that clip, with a reason
+        H.cli(self.home, "exception", "grant", slug, "jump", c4, "--why", "the beat skips ahead on purpose")
+        res, r = self.check(slug)
+        self.assertEqual(r["jump"]["status"], "excepted", r["jump"])
+        # ... a flash, a stray frame, a clipped word or a click never is
+        for rule in ("flash", "stray", "fragment", "click"):
+            x = H.cli(self.home, "exception", "grant", slug, rule, c4, "--why", "it looks fine to me", check=False)
+            self.assertNotEqual(x.returncode, 0, rule)
+        # hidden: the derived picture over the start of clip 4, so either side of the cut differs
+        H.cli(self.home, "timeline", "uncover", slug, c4, "all")
+        H.cli(self.home, "timeline", "cover", slug, c4, "--with", self.r, 4.0, 4.4, "--at", 0)
+        self.render(slug)
+        res, r = self.check(slug)
+        self.assertEqual(r["jump"]["status"], "pass", r["jump"])
+        self.assertEqual(r["held"]["status"], "pass", r["held"])
+
+    def test_a_join_that_must_reencode_cuts_on_key_frames(self):
+        """If the parts can't be joined as they are, the re-encode puts a key frame on every
+        part's first frame (no cut lands on a predicted frame)."""
+        slug, _ = self.story("Reencode")
+        orig = self.S.stream_sig
+        self.S.stream_sig = lambda p: str(p)      # every part looks different
+        try:
+            f = self.S.render(slug)
+        finally:
+            self.S.stream_sig = orig
+        import subprocess
+        tl = self.S.state()["projects"][slug]["exports"][-1]
+        self.assertEqual(tl["concat"], "reencode")
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "frame=key_frame", "-of", "csv=p=0", str(f)], capture_output=True, text=True,
+                             check=True).stdout.split()
+        keys = {k for k, x in enumerate(out) if x.strip(",") == "1"}
+        starts = [x["frame"] for x in self.S.cut_list(tl["timeline"]) if x["kind"] == "sound"]
+        self.assertTrue(set(starts) <= keys, f"cuts {starts}, key frames {sorted(keys)}")
+        pts, _, _ = self.av(f)
+        self.assert_on_grid(pts, sum(self.S.clip_frames(c) for c in tl["timeline"]["clips"]), "re-encoded export")
 
 
 if __name__ == "__main__":

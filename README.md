@@ -243,6 +243,14 @@ complete beats (and may pick none). Three things hold the hard rules:
   trims in the UI are never snapped. Every part of an export gets a 20 ms audio fade in and
   out, so cuts don't click, and `render` normalizes loudness to −14 LUFS, true peak −1 dBTP
   (two-pass `loudnorm`, video copied).
+- **Frame-exact renders.** Every clip is a whole number of 30 fps frames (its length rounded
+  once), and so is every cover stretch inside it. Each part is rendered as exactly that many
+  frames from its first frame at 0, with PCM sound of exactly frames × 1600 samples (48 kHz), no
+  metadata and no timecode track; the parts then join with the concat demuxer as they are
+  (`concat: copy` in `render.done`) and the export's AAC is encoded once, by `loudnorm`. So no
+  frame is held at a cut, every cut lands on its frame, and a cut's first frame is a clean key
+  frame. If a part's stream ever differs (e.g. VideoToolbox fell back to software), the join is
+  re-encoded with a key frame forced on every part's first frame (`concat: reencode`).
 - **Transcription only hears speech.** whisper-cli runs with `--vad` (the same Silero
   settings), `-sns` (no non-speech tokens) and `-mc 0` (no carried-over text; the vocabulary
   prompt is still carried). A file with no speech gets an empty transcript instead of an
@@ -255,8 +263,14 @@ complete beats (and may pick none). Three things hold the hard rules:
 in/out point against the speech (lead-in 0.05–0.15 s, tail ≥ 0.25 s, never inside speech,
 spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 0.35 s, VAD on the
 export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
-frozen picture (`blackdetect`, `freezedetect`), captions against a fresh transcription of the
-export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
+frozen picture (`blackdetect`, `freezedetect`), the cuts as rendered (in the same decode: the
+scene-change score with the caption band masked, mean luma and every frame's time; and the
+export's sound at each sound cut): frames that belong to neither shot (`flash`), a picture change
+near a cut that isn't in the timeline (`stray`), one-frame black or white pops (`pop`), a jump
+cut between two moments of the same footage with nothing hiding it (`jump`), speech-level sound
+right at a sound cut (`fragment`), a click (`click`), a frame off the 30 fps grid (`held`), and,
+as a warning only, a soft first frame after a cut (`soft`); captions against a fresh
+transcription of the export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
 a cartoon, a card) is picture: never a pause. A rule broken on purpose needs an exception,
 granted in words (`studio exception`, QUALITY.md), including the two things nothing measures:
 on-screen text as the hook (`--onscreen`) and a designed card (`--card`). Check marks them `EXC`
@@ -265,7 +279,8 @@ and check says so. The export is hashed before and after it's measured: if the b
 meanwhile, no record is written. It writes a review
 sheet next to the export, `exports/<name>.check/`: `cut-NN-….png` for the start, every cut and
 the end (12 frames, the waveform with speech in green, the words heard, a red line at the cut,
-1.5 s either side) and `contact.png` (24 frames of the whole export), plus `check.json` and
+1.5 s either side), `RULE-fNNNNN.png` for every cut finding (nine numbered frames around it) and
+`contact.png` (24 frames of the whole export), plus `check.json` and
 `verdict.txt` (every rule, every exception with who and why). It logs `check.done` with the
 export's sha256 and every failure by rule and clip, prints QUALITY.md's judgment rules as a checklist, and exits 1 if any hard
 rule fails. The agent's loop (AGENTS.md): render, check, look at the sheet, fix and re-render

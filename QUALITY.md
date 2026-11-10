@@ -24,9 +24,22 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Length | 15–35s by default; up to 60s only if every beat earns it |
 | Loudness | −14 LUFS integrated (±1), true peak ≤ −1 dBTP |
 | No black or frozen frames | none, unless excepted (a designed card: an exception with `--card`) |
+| No stray frames at a cut (`flash`) | no frame that belongs to neither shot: two picture changes within 3 frames |
+| Every picture cut is in the timeline (`stray`) | no picture change within 0.5s of a cut that isn't the cut (picture from past a clip's edge, a cut off its frame) |
+| No one-frame pops (`pop`) | no single black (mean luma < 16) or white (> 239) frame |
+| No jump cuts (`jump`) | the same footage either side of a cut, from different moments, is hidden: cover, a punch-in, or another shot |
+| No clipped word at a cut (`fragment`) | the 30ms either side of a sound cut stay under the reel's floor + 18 dB, on the side that's speech |
+| No click at a cut (`click`) | no sample step at a sound cut 6x the steps around it (and ≥ 0.02 full scale) |
+| Every frame on the grid (`held`) | every frame lasts exactly 1/30 s (renders are frame-exact; none is held at a cut) |
 | Captions match the audio | the export, re-transcribed, says what the captions say |
 | Captions stay clear of platform UI | nothing in the bottom ~20% or the right ~15% of a 9:16 frame |
 | Ending | the last spoken word is complete and is not filler ("yeah", "so", "um") |
+
+`check` also warns (never fails) on a **soft cut**: a first frame after a cut that differs from
+the next while the shot is still (a predicted frame; renders join losslessly, so it should be rare).
+It finds the cut rules' findings in the export's own pixels (the caption band masked) and sound, at
+the timeline's cuts, and puts nine numbered frames around each one on the review sheet
+(`jump-f00283.png`, ...).
 
 A reel is **ready** only when `studio check` has measured its exact bytes (sha256) and every hard
 rule passes, or every failure is covered by a granted exception (below). A re-render is new bytes:
@@ -47,8 +60,10 @@ studio exception ls P            # what's granted, or lapsed (--all: revoked and
 studio exception revoke P ID --why "that silence drags"                 # the operator, usually
 ```
 
-- Rules that may bend: `pauses`, `shortest`, `first word`, `picture`, `length`. The rest (a cut
-  inside a word, loudness, captions against the audio, a filler ending) are defects, never choices.
+- Rules that may bend: `pauses`, `shortest`, `first word`, `picture`, `length`, `jump` (a jump
+  cut that's meant: time skipped on purpose, in plain sight) and `held` (a frame held on purpose).
+  The rest (a cut inside a word, loudness, captions against the audio, a filler ending, a stray
+  or flashed frame, a clipped word or click at a cut) are defects, never choices.
 - An exception binds to what it was granted on: that clip as it was (media, in/out, effects), or
   the whole story for one without a clip. If that changes, it lapses and must be granted again.
 - On-screen text that is the hook (`--onscreen`) and a designed card (`--card`) are declarations
@@ -100,3 +115,9 @@ references win; update this file.
   every spoken beat is a complete thought; no fragments chosen for the picture.
 - 2026-11-09, general: "choppy, too much dead space, wouldn't perform." → pause and length
   limits above; fewer, stronger reels.
+- 2026-11-09, jefe-in-my-pocket: two frames of an empty patio flashed between two shots (a
+  derived file's room-tone handle carried its own picture). → no stray frames at a cut; a sound
+  handle on derived media is sound only, never picture from another moment.
+- 2026-11-09, editors: soft first frames and frames held at cuts in the exports (the join was
+  re-encoded; parts' sound ran longer than their picture). → renders are frame-exact and join
+  losslessly; `held` is a hard rule.
