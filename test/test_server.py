@@ -391,12 +391,58 @@ class Server(unittest.TestCase):
         self.assertFalse(self.st()["jobs"], "no job should be left running")
 
 
+    # ---- regressions: secrets never leave over HTTP ----
+    def test_keys_and_private_files_are_never_served(self):
+        """H1 (v2-lane-c review): $STUDIO_HOME/keys/ holds the library's secret keys; /files
+        must refuse it however the path is spelled, plus studio.toml and dot-files."""
+        keys = self.home / "keys"
+        keys.mkdir(exist_ok=True)
+        secret = "nsec1testsecretnotreal"
+        (keys / "nostr.key").write_text(secret + "\n")
+        (keys / "age.key").write_text("AGE-SECRET-KEY-1TESTNOTREAL\n")
+        (self.home / "studio.toml").write_text("[sync]\n")
+        (self.home / ".hidden").write_text(secret)
+        link = self.home / "media" / "lnk"
+        if not link.exists():
+            link.symlink_to(keys)
+        try:
+            for path in ("/files/keys/nostr.key", "/files/keys/age.key", "/files/keys/",
+                         "/files/KEYS/nostr.key", "/files/Keys/nostr.key",
+                         "/files/%6beys/nostr.key", "/files/media/../keys/nostr.key",
+                         "/files/media/%2e%2e/keys/nostr.key", "/files/./keys/nostr.key",
+                         "/files/media/lnk/nostr.key", "/files/studio.toml", "/files/STUDIO.TOML",
+                         "/files/.hidden", "/files/.server.lock", "/files/"):
+                status, body = self.srv.raw_get(path)
+                self.assertEqual(status, 403, path)
+                self.assertNotIn(secret.encode(), body, path)
+                self.assertNotIn(b"AGE-SECRET-KEY", body, path)
+            # ordinary library files still serve
+            mid = self.mid("phone-talking.mov")
+            kf = next((self.home / "media" / mid).glob("source.*"))
+            status, _ = self.srv.raw_get(f"/files/media/{mid}/{kf.name}")
+            self.assertEqual(status, 200)
+        finally:
+            link.unlink()
+
+    def test_foreign_host_header_is_refused(self):
+        """DNS rebinding: a page whose name now resolves to 127.0.0.1 still sends its own
+        Host; only loopback names (bare, or on this server's port) are answered."""
+        port = self.srv.port
+        for host in ("evil.example", f"evil.example:{port}", f"127.0.0.1:{port + 1}",
+                     "127.0.0.1.evil.example", f"localhost.evil.example:{port}", "", "0.0.0.0"):
+            status, _ = self.srv.raw_get("/api/health", host=host)
+            self.assertEqual(status, 403, host)
+        for host in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}", "127.0.0.1",
+                     "LOCALHOST"):
+            status, _ = self.srv.raw_get("/api/health", host=host)
+            self.assertEqual(status, 200, host)
+
     # ---- regressions: data safety ----
     def _cut_upload(self, path, name, frac=0.6):
         import socket
         data = Path(path).read_bytes()
         s = socket.create_connection(("127.0.0.1", self.srv.port), 10)
-        s.sendall(f"POST /api/upload?project=shoot&name={name} HTTP/1.1\r\nHost: x\r\n"
+        s.sendall(f"POST /api/upload?project=shoot&name={name} HTTP/1.1\r\nHost: 127.0.0.1:{self.srv.port}\r\n"
                   f"Content-Length: {len(data)}\r\n\r\n".encode() + data[: int(len(data) * frac)])
         s.shutdown(socket.SHUT_WR)              # the connection drops before the rest arrives
         resp = b""

@@ -216,10 +216,13 @@ class Server:
     def state(self):
         return self.json("GET", "/api/state")
 
-    def raw_get(self, raw_path, timeout=10):
-        """Send the request line verbatim (no client-side path normalisation)."""
+    def raw_get(self, raw_path, timeout=10, host=None):
+        """Send the request line verbatim (no client-side path normalisation). `host` is the
+        Host header (default 127.0.0.1:PORT; "" sends none)."""
+        host = f"127.0.0.1:{self.port}" if host is None else host
+        hdr = f"Host: {host}\r\n" if host else ""
         s = socket.create_connection(("127.0.0.1", self.port), timeout)
-        s.sendall(f"GET {raw_path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode())
+        s.sendall(f"GET {raw_path} HTTP/1.1\r\n{hdr}Connection: close\r\n\r\n".encode())
         buf = b""
         while True:
             chunk = s.recv(65536)
@@ -256,7 +259,8 @@ class SSE:
     def __init__(self, port):
         import threading
         self.events, self.sock = [], socket.create_connection(("127.0.0.1", port), 5)
-        self.sock.sendall(b"GET /api/stream HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n")
+        self.sock.sendall(f"GET /api/stream HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                          "Accept: text/event-stream\r\n\r\n".encode())
         self.ready = threading.Event()
         self.t = threading.Thread(target=self._run, daemon=True)
         self.t.start()

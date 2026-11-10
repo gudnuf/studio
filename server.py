@@ -133,8 +133,38 @@ def state_body():
 
 # ---------- http ------------------------------------------------------------
 
+# The only Host headers this server answers: loopback names, with no port or its own port. A
+# web page that rebinds its DNS name to 127.0.0.1 still sends its own name, so it is refused.
+LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(?::(\d+))?")
+
+
+def private_path(home, p):
+    """Files under the library the browser never gets: keys/ (the library's secret keys),
+    studio.toml, and anything with a dot-name (.server.lock, .timeline.lock, …). Checked on
+    the resolved path, case-insensitively (APFS), so encodings, `..` and symlinks can't
+    reach them."""
+    try:
+        parts = p.relative_to(home.resolve()).parts
+    except ValueError:
+        return True
+    if not parts:
+        return True
+    low = [x.lower() for x in parts]
+    return low[0] == "keys" or low == ["studio.toml"] or any(x.startswith(".") for x in parts)
+
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        m = LOCAL_HOST.fullmatch((self.headers.get("Host") or "").strip().lower())
+        if not m or (m.group(2) is not None and int(m.group(2)) != self.server.server_port):
+            self.close_connection = True      # an unread body must not become the next request
+            self.send_error(403, "bad Host header")
+            return False
+        return True
 
     def log_message(self, fmt, *args):  # keep the terminal quiet; the event log is the record
         pass
@@ -250,7 +280,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_file(p) if p else self.send_error(403)
         if path.startswith("/files/"):
             p = self.safe(S.HOME, path[7:])
-            if not p:
+            if not p or private_path(S.HOME, p):
                 return self.send_error(403)
             rel = path[7:]
             if "v=" in u.query:
