@@ -28,6 +28,9 @@ Run the CLI as `./studio …` from this folder (it enters the nix devshell by it
   your edit on what's there now.
 - **Answer every note.** Reply with `studio say "…" --re NOTE_ID`; it shows in the operator's
   "Tell the agent" thread and as a toast. Keep replies short and say what you did.
+- **Never read the library's keys.** `keys/` in the library and the output of
+  `studio-rs pair` (QR or payload) are the library's private keys. Don't open, print, copy or
+  run them; pairing is the operator's job.
 - **Never touch `~/Studio-backup-*`**, and don't point tests or experiments at the operator's
   library: use `STUDIO_HOME=$(mktemp -d)`.
 

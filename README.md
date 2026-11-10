@@ -465,6 +465,44 @@ first. Moment clips (`clips/`) aren't remade; run
 API: `POST /api/bundle {projects, out, zip}` and `POST /api/import {path}` (JSON only) start a
 background job (`share` / `import`); the UI toasts when it's done.
 
+## Pairing a phone (v2, in progress)
+
+The v2 Rust core (`crates/`, binary `studio-rs` for now) gives the library one key: a nostr
+keypair plus an age x25519 identity, shared by every device of the library in v1. It lives in
+`$STUDIO_HOME/keys/` (`nostr.key`, `age.key`; folder 0700, files 0600) and is made the first
+time `studio-rs pair` runs. The library's id is the first 16 hex characters of its public key
+in hex (not of the `npub…` text). Where the library syncs comes from `studio.toml`:
+
+```toml
+[sync]
+relays = ["ws://nous.local:7777"]
+blossom = ["http://nous.local:3000"]
+device_name = "nous"        # default: $STUDIO_DEVICE, else the hostname
+```
+
+```bash
+studio-rs pair --qr                       # the pairing QR, for the phone to scan
+studio-rs pair --payload | pbcopy        # the same payload as text (careful: see below)
+pbpaste | studio-rs pair --from -         # on another home: join from stdin
+studio-rs pair --from ~/payload.txt       # …or from a file (delete it afterwards)
+```
+
+`--from` never takes the payload itself as an argument (it would land in shell history and
+`ps`); it reads stdin (`-`) or a file. A home that already holds another library's key refuses
+to be paired over. If `keys/` is damaged (one file without the other), every command stops
+and says how to recover: delete `keys/` and run again only if the library was never used,
+otherwise re-pair from a device of the library or restore your backup. `studio ui` never
+serves `keys/`, `studio.toml` or dot-files, and answers only requests addressed to
+`127.0.0.1`/`localhost`.
+
+**Operator note.** The QR and the `--payload` text *are* the library's two private keys (plus
+the server URLs). Anyone who sees either can read, write and decrypt the whole library, and v1
+has no way to revoke one device: changing the key means re-pairing every device and
+re-encrypting every blob. So: show the QR only to the device you are pairing; clear the
+terminal's scrollback (and tmux history, screen recordings) afterwards; never paste the
+payload into a chat, a note or a log; and back up `keys/` offline (an encrypted USB stick or
+your password manager), because a lost key is a lost library.
+
 ## After a crash
 
 Restarting `studio ui` cleans up after itself: half-written uploads are deleted, a file whose
@@ -474,7 +512,7 @@ the broken line is skipped with a warning and the next event is kept.
 
 ## Tests
 
-`test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|bench]` runs:
+`test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|rust|bench]` runs:
 - fixtures, cached in `~/.cache/studio-fixtures`. They include `iphone-hdr.mov`, a 4K HEVC
   10-bit HLG file like the iPhone default.
 - CLI and API tests. The quality tests run on two more fixtures whose speech is known by
@@ -493,6 +531,9 @@ the broken line is skipped with a warning and the next event is kept.
 - `test/app_smoke.py`: the built app (`result/`), launched like the Dock does, driven through
   its `STUDIO_APP_DEVHOOK` (works with the screen locked): WebKit core path, native drops,
   menus, attach, quit, crash. Skipped when there's no `nix build .#studio-app` result.
+- The Rust workspace: `cargo test --workspace` and clippy (`--only rust` uses the lean
+  `devShells.rust`). `test/ios_build.sh [--whisper]`, run from a login shell, cross-builds it
+  for the Mac, iPhone and simulator.
 - A benchmark with budgets.
 
 Everything runs in throwaway homes on ports 7400-7499 (`STUDIO_TEST_PORTS=7700-7799` picks
