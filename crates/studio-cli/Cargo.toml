@@ -11,3 +11,9 @@ name = "studio-rs"
 path = "src/main.rs"
 
 [dependencies]
+studio-net = { path = "../studio-net" }
+clap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+nostr = { workspace = true }

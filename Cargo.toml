@@ -21,3 +21,14 @@ publish = false
 
 [workspace.dependencies]
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nostr = { version = "0.45", default-features = false, features = ["std", "os-rng"] }
+age = "0.12"
+toml = "0.9"
+toml_edit = "0.25"
+base64 = "0.22"
+qrcode = { version = "0.14", default-features = false }
+gethostname = "1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
