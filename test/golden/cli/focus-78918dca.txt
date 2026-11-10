@@ -1,0 +1,6 @@
+$ studio focus
+exit 0
+--- stdout
+{}  (ui not open)
+--- stderr
+--- events

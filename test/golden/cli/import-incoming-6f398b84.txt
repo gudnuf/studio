@@ -1,0 +1,11 @@
+$ studio import incoming
+exit 0
+--- stdout
+
+imported incoming into $STUDIO_HOME
+  0 new files, 2 already here (left as they were)
+  sparks-opener                  2 media    3 clips  Sparks opener
+  paperwork-reel                 1 media    1 clips  Paperwork reel
+  nothing new: everything in this bundle is already here
+--- stderr
+--- events

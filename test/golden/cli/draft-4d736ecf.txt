@@ -1,0 +1,5 @@
+$ studio draft fb6ba265fe81
+exit 0
+--- stdout
+--- stderr
+--- events

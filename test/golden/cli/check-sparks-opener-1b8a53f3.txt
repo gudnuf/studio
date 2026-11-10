@@ -1,0 +1,52 @@
+$ studio check sparks-opener
+exit 1
+--- stdout
+check projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (#.9s)  sha256 <new1>
+  FAIL  cuts        # spoken beats: # problems (fix: studio timeline snap P CLIP|all); # picture-only cuts (cover; the sound runs on, not a speech cut)
+              - clip # out #.50s is inside speech (#-#): it ends at #
+              - clip # in #.00s is inside speech (#-#)
+              - clip # out #.00s is inside speech (#-#): it ends at #
+              - clip # lead-in #.00s (want #-#.15s)
+              - clip # out #.00s is inside speech (#-#): it ends at #
+  pass  shortest    every spoken piece >= #.5s
+  pass  first word  first word at #.29s (want <= #.5s)
+  pass  pauses      longest pause #.00s (want <= #.35s inside speech; clips with no speech are picture, not pauses)
+  pass  length      #.9s (want #-35s; up to 60s only if every beat earns it)
+  pass  loudness    -# LUFS, true peak -# dBTP (want -# +-# LUFS, <= -# dBTP)
+  pass  picture     no black or frozen frames
+  pass  flash       no stray frames at a cut
+  pass  stray       every picture cut is in the timeline
+  pass  pop         no one-frame black or white pops
+  pass  jump        no jump cut (the same shot either side of a cut, nothing hiding it)
+  FAIL  fragment    # at #.50s, #.87s (want: no clipped word or breath at a sound cut)
+              - #.50s (frame #): speech-level sound before the cut at #.500s (-# dBFS, floor -#): a clipped word or breath, or too short a tail
+              - #.87s (frame #): speech-level sound before the cut at #.861s (-# dBFS, floor -#): a clipped word or breath, or too short a tail
+  pass  click       no click at a cut
+  pass  held        every frame on the # fps grid (none held at a cut)
+  pass  soft        the picture settles at once after every cut
+  FAIL  captions    #% of words agree (# on screen, # heard; want >= #%)
+              - captions '(nothing)' / audio 'quick story last week i walked a property with # sprinkler heads and i realized'
+              - captions 'typing up estimates' / audio 'thats time i wasnt with my kids so heres what i do'
+              - captions 'it and' / audio 'through'
+              - captions 'audio never leaves my phone that is' / audio 'job while alright were on site at'
+              - captions 'privacy part' / audio 'henderson property'
+  pass  ending      last word 'property.'
+
+review sheet: $STUDIO_HOME/projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.check
+  cut-*.png: frames, waveform (green = speech) and the words heard, #.5s either side of each cut (red line); contact.png: the whole export. Look at them.
+
+judgment (answer each honestly before telling the operator it's done; a no sends it back):
+  #. One takeaway. Can you say in one sentence what the viewer gets? If not, it isn't a reel yet.
+  #. The hook earns the second second. The first line is a number, a stake, a surprise or a claim, in the speaker's own words. Not a greeting, not "so".
+  #. Every spoken beat is a complete thought. It would make sense said alone. Never a fragment picked for the picture.
+  #. Every beat earns its place. Take it out: is the reel worse? If not, it goes.
+  #. Show, then say less. When the picture proves it (the estimate filling, the pile landing), let it. Screen inserts hold ≥ #.5s per line the viewer has to read, and are legible.
+  #. The ending pays off. The total, the finished paper, the reaction. No trailing.
+  #. True. Nothing the brand file's never-claim list forbids; no number the speaker didn't say. What you show matches what's said: no other job's paperwork under this job's numbers. Never build a sentence nobody said: cutting between complete thoughts is fine, splicing words into a new claim is fabrication. A line said about one thing can't be placed over a different thing.
+  #. Not slop. No hype words, no caption confetti (emoji, color flashes, a sound on every word), no rage bait, no app-screen-with-a-pitch ad.
+  #. The operator would post it under their name, unchanged. If you're not sure, it fails.
+
+FAIL: cuts, fragment, captions. Fix, render and check again (or, when the picture or the line justifies it, studio exception grant).
+--- stderr
+--- events
+{"data": ["actor", "brand", "excepted", "failed", "failures", "file", "ok", "project", "rules", "sha256", "sheet"], "media": null, "type": "check.done"}

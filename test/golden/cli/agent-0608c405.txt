@@ -1,0 +1,9 @@
+$ studio agent
+exit 0
+--- stdout
+agent    claude  ($STUDIO_SRC/test/fakebin/claude)
+command  claude -p --output-format json --allowedTools Read  < prompt
+model    (the agent default);  moments: claude-opus-5-5
+you are  agent
+--- stderr
+--- events

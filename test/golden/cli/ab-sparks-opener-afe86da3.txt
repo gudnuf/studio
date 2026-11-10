@@ -1,0 +1,11 @@
+$ studio ab sparks-opener
+exit 0
+--- stdout
+blind round <new1>: 2 versions, labels hidden, order shuffled
+  A  $STUDIO_HOME/projects/sparks-opener/blind/<new1>/A.mp4
+  B  $STUDIO_HOME/projects/sparks-opener/blind/<new1>/B.mp4
+  (same dates on every copy; the sizes are the real files', so don't look them up in the exports list)
+watch them, then: studio choose sparks-opener A|B|none --round <new1> [--note TEXT]
+--- stderr
+--- events
+{"data": {"actor": "agent", "brand": "jefe", "dir": "projects/sparks-opener/blind/<new1>", "kind": "version", "labels": {"A": "<export>", "B": "<export>"}, "project": "sparks-opener", "round": "<new1>"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "blind.round"}

@@ -1,0 +1,7 @@
+$ studio choose sparks-opener A --round 5dbd6ca0
+exit 0
+--- stdout
+choice <new1>: version pick b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05 of 2 (blind, round 5dbd6ca0)
+--- stderr
+--- events
+{"data": {"action": "pick", "actor": "agent", "blind": true, "brand": "jefe", "chosen": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05", "id": "<new1>", "kind": "version", "labels": {"A": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05", "B": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0"}, "options": {"b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05": {"by": "agent", "clips": ["a1000001", "a1000002", "a1000003"], "duration": 16.87, "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4", "rendered": "<ts>", "timeline_sha": "0f19adf4cd03", "verdict": "ready"}, "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0": {"by": "agent", "clips": ["a1000001", "a1000002", "a1000003"], "duration": 16.87, "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4", "rendered": "<ts>", "timeline_sha": "0f19adf4cd03", "verdict": "failed"}}, "position": 0, "project": "sparks-opener", "round": "5dbd6ca0", "shown": ["b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05", "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0"]}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "choice"}

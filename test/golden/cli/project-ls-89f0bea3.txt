@@ -1,0 +1,7 @@
+$ studio project ls
+exit 0
+--- stdout
+sparks-opener                  2 media    3 clips  Sparks opener
+paperwork-reel                 1 media    1 clips  Paperwork reel
+--- stderr
+--- events

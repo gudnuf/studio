@@ -1,0 +1,9 @@
+$ studio ui --port PORT --no-open
+exit 0
+--- stdout
+resuming local steps for 2 file(s): 184b41aee036 d19f2516ec35
+studio ui → http://127.0.0.1:PORT/   (library $STUDIO_HOME)
+--- stderr
+--- events
+{"data": {"ids": ["184b41aee036", "d19f2516ec35"], "job": "<new1>-1", "kind": "steps", "resumed": true, "steps": ["proxy", "speech", "transcribe", "keyframes"]}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "job.queued"}
+{"data": {"url": "http://127.0.0.1:PORT/"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "ui.started"}

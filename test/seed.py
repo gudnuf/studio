@@ -7,7 +7,7 @@ hand-written moments + drafts (no agent call), and a "jefe-shoot" project with a
 --bare: only create the empty home (for testing the first-run / drop-footage path).
 Then: STUDIO_HOME=/path/to/home ./studio ui --port 7450 --no-open
 
---v2: no footage, no ffmpeg. Writes a deterministic events.jsonl (fixed clock, fixed ids, device
+--v2: no ffmpeg (and, without --with-footage, no footage). Writes a deterministic events.jsonl (fixed clock, fixed ids, device
 "seed") through studio.py's own verbs wherever they need no media work (project new, timeline
 save, exception grant/revoke, choose, ab), and emits the rest (ingest, steps, render.done,
 check.done, jobs, notes) with made-up measurements: two projects with exports, a failing check
@@ -41,6 +41,9 @@ MOMENTS = {
 
 # ---------- --v2: the golden fold fixture -------------------------------------------------------
 
+FOOTAGE = {"talking.mov": "phone-talking.mov", "broll.mov": "site-walk.mov", "memo.m4a": "voice-memo.m4a"}
+
+
 class _Clock:
     """Stands in for studio.py's `datetime` module: every now() is 7 s after the last, in a fixed
     -08:00 zone whatever the machine's zone is."""
@@ -60,7 +63,7 @@ class _Clock:
         self.datetime, self.timedelta, self.timezone = _DT, dt.timedelta, dt.timezone
 
 
-def seed_v2(home):
+def seed_v2(home, footage=None):
     import datetime as dt, hashlib, random
     if (home / "events.jsonl").exists():
         sys.exit(f"{home} already has a log; --v2 writes a fresh one")
@@ -87,9 +90,12 @@ def seed_v2(home):
     sha = lambda s: hashlib.sha256(s.encode()).hexdigest()
 
     def ingest(name, project, dur, w, h, audio=True, video=True):
-        digest = sha(f"seed-media-{name}")
+        # with footage, the real bytes' sha256 (bundle and import check it); else a made-up one
+        digest = (S.bytes_sha(footage / FOOTAGE[name]) if footage else sha(f"seed-media-{name}"))
         mid = digest[:12]
         (home / "media" / mid).mkdir(parents=True, exist_ok=True)
+        if footage:     # the log says what it says; the bytes are a stand-in so ffmpeg has input
+            S.clone_or_copy(footage / FOOTAGE[name], home / "media" / mid / ("source" + Path(name).suffix))
         S.emit("ingested", mid, name=name, sha256=digest, path=str(home / "media" / mid / ("source" + Path(name).suffix)),
                project=project, duration=dur, has_audio=audio, has_video=video, width=w, height=h)
         S.emit("brand.set", mid, brand="jefe")
@@ -100,6 +106,30 @@ def seed_v2(home):
     talk = ingest("talking.mov", A, 45.0, 1080, 1920)
     broll = ingest("broll.mov", A, 30.0, 1920, 1080)
     memo = ingest("memo.m4a", "inbox", 20.0, 0, 0, video=False)
+    # the files the read verbs open (words, media show, posts, snap): small, deterministic
+    line = ("I used to spend two hours every single night typing up estimates. Now I just talk "
+            "through the job while I walk it, and the audio never leaves my phone. That is the privacy part.")
+    ws, t = [], 2.2
+    for i, w in enumerate(line.split()):
+        ws.append({"w": w, "start": round(t, 3), "end": round(t + 0.32, 3)})
+        t += 0.42 + (0.6 if w.endswith(".") else 0.0)
+    segs = [{"start": ws[0]["start"], "end": ws[-1]["end"], "text": line}]
+    d = home / "media" / talk
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "transcript.json").write_text(json.dumps({"language": "en", "segments": segs, "words": ws}, indent=1))
+    (d / "transcript.txt").write_text(f"[0:02.2] {line}\n")
+    regions = [[2.1, 9.9], [10.5, 19.6], [20.2, 31.0]]
+    (d / "speech.json").write_text(json.dumps({"model": S.VAD_MODEL_NAME, "args": S.VAD_ARGS,
+                                               "duration": 45.0, "regions": regions}, indent=1))
+    moments = [{"n": 1, "start": 2.0, "end": 9.9, "title": "Two hours every night", "hook": line[:52],
+                "pillar": "time back", "why": "seeded", "angle": "past-self", "kind": "talking"},
+               {"n": 2, "start": 20.1, "end": 31.0, "title": "Never leaves my phone",
+                "hook": "the audio never leaves my phone", "pillar": "privacy", "why": "seeded",
+                "angle": "everyday-stakes", "kind": "talking"}]
+    (d / "moments.json").write_text(json.dumps(moments, indent=1))
+    (d / "drafts.json").write_text(json.dumps({"posts": [
+        {"n": m["n"], "short": m["hook"], "x": f"X post {m['n']}", "linkedin": f"LinkedIn {m['n']}",
+         "title": m["title"]} for m in moments], "newsletter": "Newsletter.", "ideas": ["a", "b"]}, indent=1))
     for mid in (talk, broll):
         S.emit("step.proxy", mid, file="proxy.mp4", sha256=sha(f"proxy-{mid}"), chunks=4, encoder="h264_videotoolbox")
     # a CLI step's progress (job null), cleared by its step event; one left open for broll
@@ -122,7 +152,7 @@ def seed_v2(home):
 
     clips = [{"id": "a1000001", "media": talk, "in": 2.0, "out": 9.5, "label": "hook", "moment": 1},
              {"id": "a1000002", "media": talk, "in": 12.0, "out": 20.0, "pace": 1.1,
-              "cover": [{"media": broll, "in": 3.0, "out": 6.0, "at": 1.0}]},
+              "cover": [{"media": broll, "in": 3.0, "out": 6.0, "at": 13.0}]},
              {"id": "a1000003", "media": broll, "in": 0.0, "out": 3.0, "fit": "fill"},
              {"id": "a1000004", "media": memo, "in": 0.0, "out": 4.0}]     # audio-only: normalize drops it
     S.timeline_save(A, {"aspect": "9:16", "captions": True, "clips": clips}, actor="operator")
@@ -134,8 +164,9 @@ def seed_v2(home):
     def render(slug, tl, n):
         f = f"projects/{slug}/exports/{slug}-20261109-09{n:02d}00-9x16.mp4"
         (home / f).parent.mkdir(parents=True, exist_ok=True)
-        (home / f).write_bytes(f"seed export {slug} {n}".encode())
-        digest = sha(f"seed-export-{slug}-{n}")
+        body = f"seed export {slug} {n}".encode()     # not a video; its sha256 is real, so ready works
+        (home / f).write_bytes(body)
+        digest = hashlib.sha256(body).hexdigest()
         S.emit("job.queued", None, job=f"1794150000-{n}", kind="render", project=slug)
         S.emit("job.started", None, job=f"1794150000-{n}", kind="render", project=slug)
         S.emit("job.progress", None, job=f"1794150000-{n}", step="render", pct=50.0, project=slug)
@@ -197,12 +228,16 @@ def main():
     ap.add_argument("--fixtures")
     ap.add_argument("--bare", action="store_true")
     ap.add_argument("--v2", action="store_true", help="deterministic log for the golden fold fixtures")
+    ap.add_argument("--with-footage", action="store_true",
+                    help="--v2: clone the test fixtures in as the sources, so render and check run")
     a = ap.parse_args()
     home = Path(a.home).resolve()
     if home == H.REAL_HOME.resolve():
         sys.exit("refusing to seed ~/Studio")
     if a.v2:
-        seed_v2(home); print(home); return
+        if a.fixtures:
+            os.environ["STUDIO_FIXTURES"] = a.fixtures
+        seed_v2(home, footage=H.fixtures() if a.with_footage else None); print(home); return
     for d in ("inbox", "media", "projects", "uploads"):
         (home / d).mkdir(parents=True, exist_ok=True)
     if a.bare:

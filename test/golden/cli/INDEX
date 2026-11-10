@@ -1,0 +1,54 @@
+focus-78918dca.txt	studio focus
+say-649d183a.txt	studio say "…" --re NOTE_ID
+notes-a16f0d52.txt	studio notes --unread
+focus-a4fc06eb.txt	studio focus [--brief]
+timeline-show-sparks-opener-7ab893a7.txt	studio timeline show P [--json]
+words-privacy-d2a5cc87.txt	studio words ID --grep privacy
+media-show-e8cfb0d8.txt	studio media show ID
+posts-1ba4b8d6.txt	studio posts ID [--json]
+timeline-trim-sparks-opener-be3ef7d1.txt	studio timeline trim P CLIP IN OUT [--snap] --base REV
+timeline-add-sparks-opener-3623f2bf.txt	studio timeline add P MEDIA@N --base REV
+timeline-add-sparks-opener-3a13ba06.txt	studio timeline add P MEDIA IN OUT [--at N] [--snap] --base REV
+timeline-snap-sparks-opener-d39ce39c.txt	studio timeline snap P CLIP|all --base REV
+timeline-split-sparks-opener-ac0e9da0.txt	studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
+timeline-move-sparks-opener-acee7c72.txt	studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
+timeline-rm-sparks-opener-99034951.txt	studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
+timeline-label-sparks-opener-3d4db0a7.txt	studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
+timeline-fit-sparks-opener-e8226599.txt	studio timeline fit P CLIP fill|fit|auto
+timeline-cover-sparks-opener-82cd057b.txt	studio timeline cover P CLIP --with MEDIA IN OUT [--at T]
+timeline-uncover-sparks-opener-4df41c9e.txt	studio timeline uncover P CLIP [N|all]
+timeline-pace-sparks-opener-41f7fbe9.txt	studio timeline pace P CLIP|all 1.1
+timeline-tighten-sparks-opener-3ac8e8f8.txt	studio timeline tighten P CLIP|all
+timeline-voice-sparks-opener-ca57c965.txt	studio timeline voice P CLIP|all natural|off
+words-typing-writing-608d9974.txt	studio words ID --fix WRONG RIGHT [--all]
+render-sparks-opener-21f74186.txt	studio render P
+check-sparks-opener-1b8a53f3.txt	studio check P
+ready-sparks-opener-5fd321fc.txt	studio ready P
+exception-grant-sparks-opener-ddbbb522.txt	studio exception grant P RULE [CLIP] --why "…"
+exception-grant-sparks-opener-f0bb63e9.txt	studio exception grant P "first word" CLIP --onscreen "TEXT" --why "…"
+exception-grant-sparks-opener-af7ba1a5.txt	studio exception grant P picture CLIP --card --why "…"
+choose-sparks-opener-0813bec2.txt	studio choose P CHOSEN --from A,B,C
+say-0f8a63d2.txt	studio say "Trimmed clip 2 to start on 'privacy'." --re NOTE_ID
+notes-e14413da.txt	studio notes --ack NOTE_ID
+log-ee65369d.txt	studio log -n 20
+ab-sparks-opener-afe86da3.txt	studio ab P
+choose-sparks-opener-e038c780.txt	studio choose P A --round R
+moments-03efef70.txt	studio moments ID
+draft-4d736ecf.txt	studio draft ID
+moments-4d512399.txt	studio moments
+ls-ebfdec64.txt	(verb line) studio ls
+project-ls-89f0bea3.txt	(verb line) studio project ls
+project-new-3c6216d4.txt	(verb line) studio project new 'Third reel'
+state-c71f4369.txt	(verb line) studio state --json
+agent-0608c405.txt	(verb line) studio agent
+ingest-sparks-opener-57334aa1.txt	(verb line) studio ingest -p sparks-opener '$FIXTURES/screen-recording.mp4'
+proxy-ebd190da.txt	(verb line) studio proxy fb6ba265fe81 --force
+speech-308d5765.txt	(verb line) studio speech fb6ba265fe81 --force
+transcribe-cc00d28d.txt	(verb line) studio transcribe fb6ba265fe81 --force
+keyframes-9a4b7e68.txt	(verb line) studio keyframes 184b41aee036
+cut-d8111fab.txt	(verb line) studio cut fb6ba265fe81
+review-61e62b21.txt	(verb line) studio review
+bundle-shared-paperwork-reel-96db4206.txt	(verb line) studio bundle shared -p paperwork-reel
+import-incoming-6f398b84.txt	(verb line) studio import incoming
+run-paperwork-reel-446938dd.txt	(verb line) studio run --no-open -p paperwork-reel '$FIXTURES/screen-recording.mp4'
+ui-cbc629cb.txt	(verb line) studio ui --port PORT --no-open

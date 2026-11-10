@@ -1,0 +1,53 @@
+$ studio timeline show sparks-opener --json
+exit 0
+--- stdout
+{
+ "aspect": "9:16",
+ "captions": true,
+ "clips": [
+  {
+   "id": "a1000001",
+   "media": "fb6ba265fe81",
+   "in": 2.0,
+   "out": 9.5,
+   "label": "hook",
+   "moment": 1,
+   "index": 0,
+   "number": 1,
+   "fit_effective": "fill"
+  },
+  {
+   "id": "a1000002",
+   "media": "fb6ba265fe81",
+   "in": 12.0,
+   "out": 19.0,
+   "pace": 1.1,
+   "cover": [
+    {
+     "media": "184b41aee036",
+     "in": 3.0,
+     "out": 6.0,
+     "at": 13.0
+    }
+   ],
+   "index": 1,
+   "number": 2,
+   "fit_effective": "fill"
+  },
+  {
+   "id": "a1000003",
+   "media": "184b41aee036",
+   "in": 0.0,
+   "out": 3.0,
+   "fit": "fill",
+   "index": 2,
+   "number": 3,
+   "fit_effective": "fill"
+  }
+ ],
+ "voice": "natural",
+ "rev": 2,
+ "project": "sparks-opener"
+}
+--- stderr
+--- events

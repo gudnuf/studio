@@ -1,0 +1,25 @@
+$ studio log -n 20
+exit 0
+--- stdout
+<ts> check.done - {"project": "sparks-opener", "brand": "jefe", "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16
+<ts> job.queued - {"job": "1794150000-9", "kind": "check", "project": "sparks-opener"}
+<ts> job.started - {"job": "1794150000-9", "kind": "check", "project": "sparks-opener"}
+<ts> job.failed - {"job": "1794150000-9", "kind": "check", "error": "server restarted"}
+<ts> blind.round - {"round": "5dbd6ca0", "project": "sparks-opener", "brand": "jefe", "kind": "version", "labels": {"A": "b48f7e9e94ecd451a
+<ts> choice - {"id": "b86614fe", "project": "sparks-opener", "brand": "jefe", "kind": "version", "action": "pick", "shown": ["b48f7e9e
+<ts> choice - {"id": "b1c9b16f", "project": "sparks-opener", "brand": "jefe", "kind": "moment", "action": "keep", "shown": ["fb6ba265f
+<ts> note - {"text": "the cover comes in late", "project": "sparks-opener", "actor": "operator", "id": "ca431b00", "focus": {"projec
+<ts> note.ack - {"ids": ["ca431b00"], "actor": "agent"}
+<ts> note - {"text": "Moved the cover in by half a second.", "project": "sparks-opener", "actor": "agent", "id": "5185941c", "re": "
+<ts> note - {"text": "and the end card?", "project": "sparks-opener", "actor": "operator", "id": "2e256840"}
+<ts> timeline.saved - {"project": "paperwork-reel", "timeline": {"aspect": "9:16", "captions": false, "clips": [{"id": "b2000001", "media": "1
+<ts> job.queued - {"job": "1794150000-3", "kind": "render", "project": "paperwork-reel"}
+<ts> job.started - {"job": "1794150000-3", "kind": "render", "project": "paperwork-reel"}
+<ts> render.done - {"project": "paperwork-reel", "file": "projects/paperwork-reel/exports/paperwork-reel-<stamp>-9x16.mp4", "durati
+<ts> job.done - {"job": "1794150000-3", "kind": "render", "result": {"file": "projects/paperwork-reel/exports/paperwork-reel-20261109-09
+<ts> project.shelved - {"project": "paperwork-reel", "why": "not a reel: no line to open on", "actor": "operator"}
+<ts> mark - {"project": "sparks-opener", "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05", "at": 4.2, "d
+<ts> agent.status - {"text": "cutting the sparks opener", "project": "sparks-opener", "actor": "agent"}
+<ts> ui.started - {"url": "http://127.0.0.1:7317/"}
+--- stderr
+--- events

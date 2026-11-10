@@ -1,0 +1,48 @@
+$ studio run --no-open -p paperwork-reel '$FIXTURES/screen-recording.mp4'
+exit 0
+--- stdout
+  cut        184b41aee036  broll.mov
+  cut        <new1>  screen-recording.mp4
+  cut        d19f2516ec35  memo.m4a
+  draft      184b41aee036  broll.mov
+  draft      <new1>  screen-recording.mp4
+  draft      d19f2516ec35  memo.m4a
+  keyframes  184b41aee036  broll.mov
+  keyframes  <new1>  screen-recording.mp4
+  keyframes  d19f2516ec35  memo.m4a
+  moments    184b41aee036  broll.mov
+  moments    <new1>  screen-recording.mp4
+  moments    d19f2516ec35  memo.m4a
+  new  screen-recording.mp4 → <new1>  (#:#, silent)
+  proxy      <new1>  screen-recording.mp4
+  proxy      d19f2516ec35  memo.m4a
+  speech     <new1>  screen-recording.mp4
+  speech     d19f2516ec35  memo.m4a
+  transcribe 184b41aee036  broll.mov
+  transcribe <new1>  screen-recording.mp4
+  transcribe d19f2516ec35  memo.m4a
+review → $STUDIO_HOME/review.html
+--- stderr
+--- events
+{"data": ["brand"], "media": "<new1>", "type": "brand.set"}
+{"data": ["chunks", "encoder", "file", "sha256"], "media": "<new1>", "type": "step.proxy"}
+{"data": ["clips", "files"], "media": "184b41aee036", "type": "step.cut"}
+{"data": ["clips", "files"], "media": "<new1>", "type": "step.cut"}
+{"data": ["clips", "skipped"], "media": "d19f2516ec35", "type": "step.cut"}
+{"data": ["dropped", "fixed", "segments", "sha256", "speech", "words"], "media": "184b41aee036", "type": "step.transcribe"}
+{"data": ["dropped", "fixed", "segments", "sha256", "speech", "words"], "media": "d19f2516ec35", "type": "step.transcribe"}
+{"data": ["duration", "has_audio", "has_video", "height", "name", "path", "project", "sha256", "width"], "media": "<new1>", "type": "ingested"}
+{"data": ["every", "frames"], "media": "184b41aee036", "type": "step.keyframes"}
+{"data": ["every", "frames"], "media": "<new1>", "type": "step.keyframes"}
+{"data": ["files", "path"], "media": null, "type": "review.written"}
+{"data": ["frames", "skipped"], "media": "d19f2516ec35", "type": "step.keyframes"}
+{"data": ["moments", "provenance", "sha256"], "media": "184b41aee036", "type": "step.moments"}
+{"data": ["moments", "provenance", "sha256"], "media": "<new1>", "type": "step.moments"}
+{"data": ["moments", "provenance", "sha256"], "media": "d19f2516ec35", "type": "step.moments"}
+{"data": ["posts", "provenance", "sha256"], "media": "184b41aee036", "type": "step.draft"}
+{"data": ["posts", "provenance", "sha256"], "media": "<new1>", "type": "step.draft"}
+{"data": ["posts", "provenance", "sha256"], "media": "d19f2516ec35", "type": "step.draft"}
+{"data": ["regions", "sha256", "speech_s"], "media": "d19f2516ec35", "type": "step.speech"}
+{"data": ["regions", "skipped"], "media": "<new1>", "type": "step.speech"}
+{"data": ["skipped", "words"], "media": "<new1>", "type": "step.transcribe"}
+{"data": ["skipped"], "media": "d19f2516ec35", "type": "step.proxy"}

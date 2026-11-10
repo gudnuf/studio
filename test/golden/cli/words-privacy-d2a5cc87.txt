@@ -1,0 +1,6 @@
+$ studio words fb6ba265fe81 --grep privacy
+exit 0
+--- stdout
+   17.26    17.58  privacy          …phone. That is the privacy part.…
+--- stderr
+--- events

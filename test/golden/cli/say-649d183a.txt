@@ -1,0 +1,8 @@
+$ studio say 'the held beat lands the line' --re 2e256840
+exit 0
+--- stdout
+said (<new1>)
+--- stderr
+--- events
+{"data": {"actor": "agent", "ids": ["2e256840"]}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "note.ack"}
+{"data": {"actor": "agent", "id": "<new1>", "project": "sparks-opener", "re": "2e256840", "text": "the held beat lands the line"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "note"}

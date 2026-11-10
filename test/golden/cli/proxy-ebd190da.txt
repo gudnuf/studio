@@ -1,0 +1,7 @@
+$ studio proxy fb6ba265fe81 --force
+exit 0
+--- stdout
+  proxy      fb6ba265fe81  talking.mov
+--- stderr
+--- events
+{"data": ["chunks", "encoder", "file", "sha256"], "media": "fb6ba265fe81", "type": "step.proxy"}

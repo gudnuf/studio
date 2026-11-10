@@ -2341,6 +2341,13 @@ class Golden(unittest.TestCase):
                            capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    @unittest.skipUnless(H.have_tools("ffmpeg", "ffprobe", "whisper-cli"), "needs ffmpeg/whisper-cli (nix develop)")
+    def test_cli_contract(self):
+        """test/cli_contract.sh: every AGENTS.md line and a real line for every verb, as goldens (task 0.3)."""
+        r = subprocess.run(["bash", str(H.TEST_DIR / "cli_contract.sh")], capture_output=True, text=True,
+                           timeout=900, env={k: v for k, v in os.environ.items() if k not in H.AGENT_ENV})
+        self.assertEqual(r.returncode, 0, r.stdout[-4000:] + r.stderr[-2000:])
+
     def test_state_json_is_the_fold(self):
         home = H.new_home("state-json")
         shutil.copy(self.G / "seeded.events.jsonl", home / "events.jsonl")

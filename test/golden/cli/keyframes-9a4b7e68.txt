@@ -1,0 +1,7 @@
+$ studio keyframes 184b41aee036
+exit 0
+--- stdout
+  keyframes  184b41aee036  broll.mov
+--- stderr
+--- events
+{"data": ["every", "frames"], "media": "184b41aee036", "type": "step.keyframes"}

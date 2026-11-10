@@ -1,0 +1,7 @@
+$ studio project new 'Third reel'
+exit 0
+--- stdout
+third-reel
+--- stderr
+--- events
+{"data": {"brand": "jefe", "name": "Third reel", "slug": "third-reel"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "project.created"}

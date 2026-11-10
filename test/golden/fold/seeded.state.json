@@ -163,7 +163,7 @@
    "focus": {
     "at": 9.4,
     "project": "sparks-opener",
-    "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f"
+    "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05"
    },
    "id": "ca431b00",
    "project": "sparks-opener",
@@ -213,7 +213,7 @@
      },
      "project": "paperwork-reel",
      "secs": 12.5,
-     "sha256": "c6100440bf93b94a178a0c09509da27cd3869be6edea01f9fddd55f6a04476ed",
+     "sha256": "71979c274e8456c93b2dca57997d0a6fcf9a444a7ed663010d2e6cf024eafa0b",
      "timeline": {
       "aspect": "9:16",
       "captions": false,
@@ -259,7 +259,7 @@
   "sparks-opener": {
    "brand": "jefe",
    "checks": {
-    "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f": {
+    "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05": {
      "actor": "agent",
      "failed": [
       "pauses"
@@ -267,18 +267,18 @@
      "failures": [
       {
        "clip": "a1000002",
-       "fp": "e50fa724c6da92fa",
+       "fp": "f5e79db73b5374e2",
        "item": "0.55s pause at 9.40s (clip 2)",
-       "reel": "362b4a0b0676e8f7",
+       "reel": "092f06cbc412019b",
        "rule": "pauses"
       }
      ],
      "file": "projects/sparks-opener/exports/sparks-opener-20261109-090200-9x16.mp4",
      "ok": false,
-     "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
+     "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
      "ts": "2026-11-09T09:04:47-08:00"
     },
-    "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae": {
+    "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0": {
      "actor": "agent",
      "failed": [
       "pauses",
@@ -287,22 +287,22 @@
      "failures": [
       {
        "clip": "a1000002",
-       "fp": "e50fa724c6da92fa",
+       "fp": "f5e79db73b5374e2",
        "item": "0.55s pause at 9.40s (clip 2)",
-       "reel": "362b4a0b0676e8f7",
+       "reel": "092f06cbc412019b",
        "rule": "pauses"
       },
       {
        "clip": "a1000003",
        "fp": "8f0dd61863e8023a",
        "item": "black 14.0-14.2s",
-       "reel": "362b4a0b0676e8f7",
+       "reel": "092f06cbc412019b",
        "rule": "picture"
       }
      ],
      "file": "projects/sparks-opener/exports/sparks-opener-20261109-090100-9x16.mp4",
      "ok": false,
-     "sha256": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae",
+     "sha256": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0",
      "ts": "2026-11-09T09:03:44-08:00"
     }
    },
@@ -329,7 +329,7 @@
      "actor": "agent",
      "brand": "jefe",
      "clip": "a1000002",
-     "fp": "e50fa724c6da92fa",
+     "fp": "f5e79db73b5374e2",
      "id": "9923eddf",
      "project": "sparks-opener",
      "rule": "pauses",
@@ -352,6 +352,20 @@
        "same": true
       },
       {
+       "at": 8.4,
+       "clip": 2,
+       "frame": 252,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 11.133,
+       "clip": 2,
+       "frame": 334,
+       "kind": "picture",
+       "same": false
+      },
+      {
        "at": 13.867,
        "clip": 2,
        "frame": 416,
@@ -368,7 +382,7 @@
      },
      "project": "sparks-opener",
      "secs": 12.5,
-     "sha256": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae",
+     "sha256": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0",
      "timeline": {
       "aspect": "9:16",
       "captions": true,
@@ -384,7 +398,7 @@
        {
         "cover": [
          {
-          "at": 1.0,
+          "at": 13.0,
           "in": 3.0,
           "media": "a78e65aab386",
           "out": 6.0
@@ -415,9 +429,9 @@
         "by": "agent",
         "clip": "a1000002",
         "exception": "9923eddf",
-        "fp": "e50fa724c6da92fa",
+        "fp": "f5e79db73b5374e2",
         "item": "0.55s pause at 9.40s (clip 2)",
-        "reel": "362b4a0b0676e8f7",
+        "reel": "092f06cbc412019b",
         "rule": "pauses",
         "why": "the held beat lands the line; the picture carries it"
        }
@@ -430,7 +444,7 @@
         "clip": "a1000003",
         "fp": "8f0dd61863e8023a",
         "item": "black 14.0-14.2s",
-        "reel": "362b4a0b0676e8f7",
+        "reel": "092f06cbc412019b",
         "rule": "picture"
        }
       ],
@@ -451,6 +465,20 @@
        "same": true
       },
       {
+       "at": 8.4,
+       "clip": 2,
+       "frame": 252,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 11.133,
+       "clip": 2,
+       "frame": 334,
+       "kind": "picture",
+       "same": false
+      },
+      {
        "at": 13.867,
        "clip": 2,
        "frame": 416,
@@ -467,7 +495,7 @@
      },
      "project": "sparks-opener",
      "secs": 12.5,
-     "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
+     "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
      "timeline": {
       "aspect": "9:16",
       "captions": true,
@@ -483,7 +511,7 @@
        {
         "cover": [
          {
-          "at": 1.0,
+          "at": 13.0,
           "in": 3.0,
           "media": "a78e65aab386",
           "out": 6.0
@@ -514,9 +542,9 @@
         "by": "agent",
         "clip": "a1000002",
         "exception": "9923eddf",
-        "fp": "e50fa724c6da92fa",
+        "fp": "f5e79db73b5374e2",
         "item": "0.55s pause at 9.40s (clip 2)",
-        "reel": "362b4a0b0676e8f7",
+        "reel": "092f06cbc412019b",
         "rule": "pauses",
         "why": "the held beat lands the line; the picture carries it"
        }
@@ -538,8 +566,8 @@
      "dir": "projects/sparks-opener/blind/5dbd6ca0",
      "kind": "version",
      "labels": {
-      "A": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
-      "B": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae"
+      "A": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
+      "B": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0"
      },
      "project": "sparks-opener",
      "round": "5dbd6ca0",
@@ -562,7 +590,7 @@
      {
       "cover": [
        {
-        "at": 1.0,
+        "at": 13.0,
         "in": 3.0,
         "media": "a78e65aab386",
         "out": 6.0

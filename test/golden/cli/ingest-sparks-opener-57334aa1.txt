@@ -1,0 +1,17 @@
+$ studio ingest -p sparks-opener '$FIXTURES/screen-recording.mp4'
+exit 0
+--- stdout
+  new  screen-recording.mp4 → <new1>  (#:#, silent)
+  speech     <new1>  screen-recording.mp4
+  transcribe <new1>  screen-recording.mp4
+  proxy      <new1>  screen-recording.mp4
+  keyframes  <new1>  screen-recording.mp4
+# new, # already in the library
+--- stderr
+--- events
+{"data": ["duration", "has_audio", "has_video", "height", "name", "path", "project", "sha256", "width"], "media": "<new1>", "type": "ingested"}
+{"data": ["brand"], "media": "<new1>", "type": "brand.set"}
+{"data": ["regions", "skipped"], "media": "<new1>", "type": "step.speech"}
+{"data": ["skipped", "words"], "media": "<new1>", "type": "step.transcribe"}
+{"data": ["chunks", "encoder", "file", "sha256"], "media": "<new1>", "type": "step.proxy"}
+{"data": ["every", "frames"], "media": "<new1>", "type": "step.keyframes"}

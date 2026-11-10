@@ -1,0 +1,8 @@
+$ studio words fb6ba265fe81 --fix typing writing --all
+exit 0
+--- stdout
+fb6ba265fe81  talking.mov: 1 × 'typing' → 'writing'
+fixed 1 word in 1 file searched
+--- stderr
+--- events
+{"data": {"actor": "agent", "count": 1, "right": "writing", "sha256": "<new1>", "wrong": "typing"}, "id": "<uuid>", "media": "fb6ba265fe81", "ts": "<ts>", "type": "transcript.edited"}

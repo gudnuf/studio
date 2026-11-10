@@ -1,0 +1,7 @@
+$ studio review
+exit 0
+--- stdout
+$STUDIO_HOME/review.html
+--- stderr
+--- events
+{"data": {"files": 3, "path": "$STUDIO_HOME/review.html"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "review.written"}

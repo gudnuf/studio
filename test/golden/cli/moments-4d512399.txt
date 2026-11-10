@@ -1,0 +1,6 @@
+$ studio moments
+exit 1
+--- stdout
+--- stderr
+studio moments: pass media ids, or --all for every file missing it (this calls your agent for each one). To read results: studio media show ID / studio posts ID / studio words ID
+--- events

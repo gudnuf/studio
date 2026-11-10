@@ -1,0 +1,12 @@
+$ studio media show fb6ba265fe81
+exit 0
+--- stdout
+fb6ba265fe81  talking.mov  0:45.0  1080x1920  project sparks-opener  steps: proxy speech transcribe keyframes moments draft
+moments  (add one with: studio timeline add PROJECT fb6ba265fe81@N)
+   1  0:02.0–0:09.9  (7.9s)  Two hours every night
+      hook: I used to spend two hours every single night typing 
+   2  0:20.1–0:31.0  (10.9s)  Never leaves my phone
+      hook: the audio never leaves my phone
+posts: 2 drafted  (studio posts fb6ba265fe81)
+--- stderr
+--- events

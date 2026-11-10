@@ -1,0 +1,7 @@
+$ studio speech fb6ba265fe81 --force
+exit 0
+--- stdout
+  speech     fb6ba265fe81  talking.mov
+--- stderr
+--- events
+{"data": ["regions", "sha256", "speech_s"], "media": "fb6ba265fe81", "type": "step.speech"}

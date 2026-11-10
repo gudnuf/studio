@@ -1,0 +1,7 @@
+$ studio ready sparks-opener
+exit 0
+--- stdout
+ready: projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (checked <ts> by agent)
+  ~ EXCEPTION 9923eddf by agent: pauses: 0.55s pause at 9.40s (clip 2). Why: the held beat lands the line; the picture carries it
+--- stderr
+--- events

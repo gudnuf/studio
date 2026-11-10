@@ -1,0 +1,28 @@
+$ studio posts fb6ba265fe81 --json
+exit 0
+--- stdout
+{
+ "posts": [
+  {
+   "n": 1,
+   "short": "I used to spend two hours every single night typing ",
+   "x": "X post 1",
+   "linkedin": "LinkedIn 1",
+   "title": "Two hours every night"
+  },
+  {
+   "n": 2,
+   "short": "the audio never leaves my phone",
+   "x": "X post 2",
+   "linkedin": "LinkedIn 2",
+   "title": "Never leaves my phone"
+  }
+ ],
+ "newsletter": "Newsletter.",
+ "ideas": [
+  "a",
+  "b"
+ ]
+}
+--- stderr
+--- events

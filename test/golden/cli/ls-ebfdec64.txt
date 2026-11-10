@@ -1,0 +1,8 @@
+$ studio ls
+exit 0
+--- stdout
+fb6ba265fe81  sparks-opener     0:45.0  talking.mov                           proxy speech transcribe keyframes moments draft
+184b41aee036  sparks-opener     0:30.0  broll.mov                             proxy speech
+d19f2516ec35  paperwork-reel    0:20.0  memo.m4a                              
+--- stderr
+--- events

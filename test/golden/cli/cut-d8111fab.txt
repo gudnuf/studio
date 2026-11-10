@@ -1,0 +1,7 @@
+$ studio cut fb6ba265fe81
+exit 0
+--- stdout
+  cut        fb6ba265fe81  talking.mov
+--- stderr
+--- events
+{"data": ["clips", "files"], "media": "fb6ba265fe81", "type": "step.cut"}

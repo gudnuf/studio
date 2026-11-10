@@ -1,0 +1,622 @@
+$ studio state --json
+exit 0
+--- stdout
+{
+ "jobs": {
+  "1794150000-1": {
+   "job": "1794150000-1",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "sparks-opener",
+   "result": {
+    "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "<ts>"
+  },
+  "1794150000-2": {
+   "job": "1794150000-2",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "sparks-opener",
+   "result": {
+    "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "<ts>"
+  },
+  "1794150000-3": {
+   "job": "1794150000-3",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "paperwork-reel",
+   "result": {
+    "file": "projects/paperwork-reel/exports/paperwork-reel-<stamp>-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "<ts>"
+  },
+  "1794150000-9": {
+   "error": "server restarted",
+   "job": "1794150000-9",
+   "kind": "check",
+   "project": "sparks-opener",
+   "status": "failed",
+   "ts": "<ts>"
+  }
+ },
+ "media": {
+  "184b41aee036": {
+   "brand": "jefe",
+   "duration": 30.0,
+   "has_audio": true,
+   "has_video": true,
+   "height": 1080,
+   "id": "184b41aee036",
+   "name": "broll.mov",
+   "path": "$STUDIO_HOME/media/184b41aee036/source.mov",
+   "project": "sparks-opener",
+   "sha256": "184b41aee036bfa7e8658988804e05980e6b533be26500cdc7f1dab9645a7e9f",
+   "steps": {
+    "proxy": {
+     "chunks": 4,
+     "encoder": "h264_videotoolbox",
+     "file": "proxy.mp4",
+     "sha256": "43b0df8b6ca52d989f6429fccf37154a7b17b58b4b86fa1ee9018ca6ef6bce78"
+    },
+    "speech": {
+     "regions": 0,
+     "skipped": "no speech"
+    }
+   },
+   "width": 1920
+  },
+  "d19f2516ec35": {
+   "brand": "jefe",
+   "duration": 20.0,
+   "error": {
+    "error": "whisper-cli failed (1): model not found",
+    "step": "transcribe"
+   },
+   "has_audio": true,
+   "has_video": false,
+   "height": 0,
+   "id": "d19f2516ec35",
+   "name": "memo.m4a",
+   "path": "$STUDIO_HOME/media/d19f2516ec35/source.m4a",
+   "project": "paperwork-reel",
+   "sha256": "d19f2516ec35f541e50028c5cf3460cab13f479032ddb69e583f8faed9e59379",
+   "steps": {},
+   "width": 0
+  },
+  "fb6ba265fe81": {
+   "brand": "jefe",
+   "draft_edits": {
+    "1": {
+     "short": "Two hours a night, back."
+    }
+   },
+   "duration": 45.0,
+   "has_audio": true,
+   "has_video": true,
+   "height": 1920,
+   "id": "fb6ba265fe81",
+   "name": "talking.mov",
+   "path": "$STUDIO_HOME/media/fb6ba265fe81/source.mov",
+   "project": "sparks-opener",
+   "sha256": "fb6ba265fe815dfc89906c2633075361791041630662fbc51c0fa0afa643d118",
+   "steps": {
+    "draft": {
+     "posts": 2,
+     "provenance": {
+      "model": "claude-opus-5-5",
+      "prompt": "ba9876543210",
+      "provider": "claude"
+     },
+     "sha256": "f9a78ea10bf6c55aedbce856dbfb8cd22dec9ef23582b85583b53b200c47f7ff"
+    },
+    "keyframes": {
+     "every": 1.0,
+     "frames": 45
+    },
+    "moments": {
+     "moments": 2,
+     "provenance": {
+      "model": "claude-opus-5-5",
+      "prompt": "0123456789ab",
+      "provider": "claude"
+     },
+     "sha256": "6c66e03978df98378139e6b57ec777fd8b07c99b72ac5f0d00ab2f1ac544c530"
+    },
+    "proxy": {
+     "chunks": 4,
+     "encoder": "h264_videotoolbox",
+     "file": "proxy.mp4",
+     "sha256": "16323b8c52626610d923e50789c6dcf144df12624e6b4cef1058be2e09ef3bdc"
+    },
+    "speech": {
+     "regions": 9,
+     "sha256": "def005d293267f95de7828497b1d24f3e92765e6c802a0b9553e4790fa1254ce",
+     "speech_s": 31.4
+    },
+    "transcribe": {
+     "dropped": [
+      "thank you"
+     ],
+     "edits": 1,
+     "fixed": 1,
+     "segments": 12,
+     "sha256": "62387f8c2ac5fb54653626e2830d1df07f0dcc0061d8df45e69bf6ace5b28bf2",
+     "words": 96
+    }
+   },
+   "width": 1080
+  }
+ },
+ "notes": [
+  {
+   "acked": "<ts>",
+   "actor": "operator",
+   "focus": {
+    "at": 9.4,
+    "project": "sparks-opener",
+    "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05"
+   },
+   "id": "ca431b00",
+   "project": "sparks-opener",
+   "text": "the cover comes in late",
+   "ts": "<ts>"
+  },
+  {
+   "actor": "agent",
+   "id": "5185941c",
+   "project": "sparks-opener",
+   "re": "ca431b00",
+   "text": "Moved the cover in by half a second.",
+   "ts": "<ts>"
+  },
+  {
+   "actor": "operator",
+   "id": "2e256840",
+   "project": "sparks-opener",
+   "text": "and the end card?",
+   "ts": "<ts>"
+  }
+ ],
+ "progress": {
+  "184b41aee036": {
+   "pct": 55.5,
+   "step": "keyframes",
+   "ts": "<ts>"
+  }
+ },
+ "projects": {
+  "paperwork-reel": {
+   "brand": "jefe",
+   "created": "<ts>",
+   "exports": [
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 1,
+     "concat": "copy",
+     "cuts": [],
+     "duration": 7.0,
+     "file": "projects/paperwork-reel/exports/paperwork-reel-<stamp>-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "paperwork-reel",
+     "secs": 12.5,
+     "sha256": "71979c274e8456c93b2dca57997d0a6fcf9a444a7ed663010d2e6cf024eafa0b",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": false,
+      "clips": [
+       {
+        "id": "b2000001",
+        "in": 5.0,
+        "media": "184b41aee036",
+        "out": 12.0
+       }
+      ]
+     },
+     "ts": "<ts>",
+     "verdict": {
+      "state": "unchecked",
+      "why": "not checked (studio check)"
+     }
+    }
+   ],
+   "name": "Paperwork reel",
+   "ready": false,
+   "rev": 1,
+   "rev_actor": "agent",
+   "shelved": {
+    "actor": "operator",
+    "ts": "<ts>",
+    "why": "not a reel: no line to open on"
+   },
+   "slug": "paperwork-reel",
+   "timeline": {
+    "aspect": "9:16",
+    "captions": false,
+    "clips": [
+     {
+      "id": "b2000001",
+      "in": 5.0,
+      "media": "184b41aee036",
+      "out": 12.0
+     }
+    ]
+   }
+  },
+  "sparks-opener": {
+   "brand": "jefe",
+   "checks": {
+    "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05": {
+     "actor": "agent",
+     "failed": [
+      "pauses"
+     ],
+     "failures": [
+      {
+       "clip": "a1000002",
+       "fp": "ab1e898bd7241e2b",
+       "item": "0.55s pause at 9.40s (clip 2)",
+       "reel": "82597c963b22388f",
+       "rule": "pauses"
+      }
+     ],
+     "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4",
+     "ok": false,
+     "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
+     "ts": "<ts>"
+    },
+    "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0": {
+     "actor": "agent",
+     "failed": [
+      "pauses",
+      "picture"
+     ],
+     "failures": [
+      {
+       "clip": "a1000002",
+       "fp": "ab1e898bd7241e2b",
+       "item": "0.55s pause at 9.40s (clip 2)",
+       "reel": "82597c963b22388f",
+       "rule": "pauses"
+      },
+      {
+       "clip": "a1000003",
+       "fp": "442931cc0613b597",
+       "item": "black 14.0-14.2s",
+       "reel": "82597c963b22388f",
+       "rule": "picture"
+      }
+     ],
+     "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4",
+     "ok": false,
+     "sha256": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0",
+     "ts": "<ts>"
+    }
+   },
+   "created": "<ts>",
+   "exceptions": {
+    "17ae71fb": {
+     "actor": "agent",
+     "brand": "jefe",
+     "clip": "a1000003",
+     "fp": "442931cc0613b597",
+     "id": "17ae71fb",
+     "kind": "card",
+     "project": "sparks-opener",
+     "revoked": {
+      "actor": "operator",
+      "ts": "<ts>",
+      "why": "that is not a card, it is a dropped frame"
+     },
+     "rule": "picture",
+     "ts": "<ts>",
+     "why": "a designed card, the dark ground is meant"
+    },
+    "9923eddf": {
+     "actor": "agent",
+     "brand": "jefe",
+     "clip": "a1000002",
+     "fp": "ab1e898bd7241e2b",
+     "id": "9923eddf",
+     "project": "sparks-opener",
+     "rule": "pauses",
+     "ts": "<ts>",
+     "why": "the held beat lands the line; the picture carries it"
+    }
+   },
+   "exports": [
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 3,
+     "concat": "copy",
+     "cuts": [
+      {
+       "at": 7.5,
+       "clip": 1,
+       "frame": 225,
+       "kind": "sound",
+       "same": true
+      },
+      {
+       "at": 8.4,
+       "clip": 2,
+       "frame": 252,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 11.133,
+       "clip": 2,
+       "frame": 334,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 13.867,
+       "clip": 2,
+       "frame": 416,
+       "kind": "sound",
+       "same": false
+      }
+     ],
+     "duration": 16.87,
+     "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "sparks-opener",
+     "secs": 12.5,
+     "sha256": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": true,
+      "clips": [
+       {
+        "id": "a1000001",
+        "in": 2.0,
+        "label": "hook",
+        "media": "fb6ba265fe81",
+        "moment": 1,
+        "out": 9.5
+       },
+       {
+        "cover": [
+         {
+          "at": 13.0,
+          "in": 3.0,
+          "media": "184b41aee036",
+          "out": 6.0
+         }
+        ],
+        "id": "a1000002",
+        "in": 12.0,
+        "media": "fb6ba265fe81",
+        "out": 19.0,
+        "pace": 1.1
+       },
+       {
+        "fit": "fill",
+        "id": "a1000003",
+        "in": 0.0,
+        "media": "184b41aee036",
+        "out": 3.0
+       }
+      ],
+      "voice": "natural"
+     },
+     "ts": "<ts>",
+     "verdict": {
+      "by": "agent",
+      "checked": "<ts>",
+      "excepted": [
+       {
+        "by": "agent",
+        "clip": "a1000002",
+        "exception": "9923eddf",
+        "fp": "ab1e898bd7241e2b",
+        "item": "0.55s pause at 9.40s (clip 2)",
+        "reel": "82597c963b22388f",
+        "rule": "pauses",
+        "why": "the held beat lands the line; the picture carries it"
+       }
+      ],
+      "failed": [
+       "picture"
+      ],
+      "open": [
+       {
+        "clip": "a1000003",
+        "fp": "442931cc0613b597",
+        "item": "black 14.0-14.2s",
+        "reel": "82597c963b22388f",
+        "rule": "picture"
+       }
+      ],
+      "state": "failed"
+     }
+    },
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 3,
+     "concat": "copy",
+     "cuts": [
+      {
+       "at": 7.5,
+       "clip": 1,
+       "frame": 225,
+       "kind": "sound",
+       "same": true
+      },
+      {
+       "at": 8.4,
+       "clip": 2,
+       "frame": 252,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 11.133,
+       "clip": 2,
+       "frame": 334,
+       "kind": "picture",
+       "same": false
+      },
+      {
+       "at": 13.867,
+       "clip": 2,
+       "frame": 416,
+       "kind": "sound",
+       "same": false
+      }
+     ],
+     "duration": 16.87,
+     "file": "projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "sparks-opener",
+     "secs": 12.5,
+     "sha256": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": true,
+      "clips": [
+       {
+        "id": "a1000001",
+        "in": 2.0,
+        "label": "hook",
+        "media": "fb6ba265fe81",
+        "moment": 1,
+        "out": 9.5
+       },
+       {
+        "cover": [
+         {
+          "at": 13.0,
+          "in": 3.0,
+          "media": "184b41aee036",
+          "out": 6.0
+         }
+        ],
+        "id": "a1000002",
+        "in": 12.0,
+        "media": "fb6ba265fe81",
+        "out": 19.0,
+        "pace": 1.1
+       },
+       {
+        "fit": "fill",
+        "id": "a1000003",
+        "in": 0.0,
+        "media": "184b41aee036",
+        "out": 3.0
+       }
+      ],
+      "voice": "natural"
+     },
+     "ts": "<ts>",
+     "verdict": {
+      "by": "agent",
+      "checked": "<ts>",
+      "excepted": [
+       {
+        "by": "agent",
+        "clip": "a1000002",
+        "exception": "9923eddf",
+        "fp": "ab1e898bd7241e2b",
+        "item": "0.55s pause at 9.40s (clip 2)",
+        "reel": "82597c963b22388f",
+        "rule": "pauses",
+        "why": "the held beat lands the line; the picture carries it"
+       }
+      ],
+      "failed": [],
+      "open": [],
+      "state": "ready"
+     }
+    }
+   ],
+   "name": "Sparks opener",
+   "ready": true,
+   "rev": 2,
+   "rev_actor": "agent",
+   "rounds": {
+    "5dbd6ca0": {
+     "actor": "operator",
+     "brand": "jefe",
+     "dir": "projects/sparks-opener/blind/5dbd6ca0",
+     "kind": "version",
+     "labels": {
+      "A": "b48f7e9e94ecd451a3429f13c89498fd3d4867a9bf2250b2fb70a50f09225e05",
+      "B": "ea0577bea1d7dfa22358750c329b9869cb176e5cb14efa5b06975d8334e682a0"
+     },
+     "project": "sparks-opener",
+     "round": "5dbd6ca0",
+     "ts": "<ts>"
+    }
+   },
+   "slug": "sparks-opener",
+   "timeline": {
+    "aspect": "9:16",
+    "captions": true,
+    "clips": [
+     {
+      "id": "a1000001",
+      "in": 2.0,
+      "label": "hook",
+      "media": "fb6ba265fe81",
+      "moment": 1,
+      "out": 9.5
+     },
+     {
+      "cover": [
+       {
+        "at": 13.0,
+        "in": 3.0,
+        "media": "184b41aee036",
+        "out": 6.0
+       }
+      ],
+      "id": "a1000002",
+      "in": 12.0,
+      "media": "fb6ba265fe81",
+      "out": 19.0,
+      "pace": 1.1
+     },
+     {
+      "fit": "fill",
+      "id": "a1000003",
+      "in": 0.0,
+      "media": "184b41aee036",
+      "out": 3.0
+     }
+    ],
+    "voice": "natural"
+   }
+  }
+ }
+}
+--- stderr
+--- events

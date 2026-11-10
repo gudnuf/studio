@@ -1,0 +1,14 @@
+$ studio bundle shared -p paperwork-reel
+exit 0
+--- stdout
+bundling into shared
+  [1/2] footage/Paperwork reel/memo.m4a
+  [2/2] footage/Sparks opener/01 - broll.mov
+
+shared 1 project (Paperwork reel): 2 files, 0 moments
+  $TMP/shared
+  total 61.6 MB  (footage 61.6 MB, library 2.9 KB)
+  footage and exports are APFS clones: the folder takes no extra space on this disk
+  the teammate runs: studio import <the unzipped folder>  (or File ▸ Import… in the app)
+--- stderr
+--- events
