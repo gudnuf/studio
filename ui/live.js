@@ -81,6 +81,10 @@ function onEvent(ev) {
     if (r.zip_bytes > 15e9) toast(`The zip is ${gb(r.zip_bytes)}: Google Drive takes it, but uploading and downloading will be slow. One project per bundle keeps them smaller.`, { kind: 'warn', ms: 10000 });
     native?.notify('Bundle ready', r.zip || r.dir);
   }
+  for (const x of (ev.type === 'job.done' && d.kind === 'upload' && d.result?.elsewhere) || []) {
+    const pj = S.server?.projects?.[x.project]?.name || x.project;
+    toast(`${d.name || x.name || 'That file'} is already here, as “${x.name}” in “${pj}”. It stays there; any story can use it (or move it: studio media move ${x.id} PROJECT).`, { kind: 'warn', ms: 9000 });
+  }
   if (ev.type === 'bundle.imported') {
     const n = (d.files || []).length, slugs = [...new Set(Object.values(d.projects || {}))];
     const names = slugs.map(s => S.server?.projects?.[s]?.name || s);

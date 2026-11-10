@@ -645,6 +645,25 @@ class DesktopApp(unittest.TestCase):
                 self.assertIn(s, m["steps"])
         self.assertEqual({f: sig(f) for f in files}, before, "originals untouched, nothing moved (even from inbox/)")
 
+    def test_ingest_paths_says_where_footage_already_is(self):
+        """Dropping a file whose bytes are already in another project leaves it there and says
+        so in the job's result (the UI toasts it)."""
+        import shutil
+        home = H.new_home("paths-elsewhere")
+        f = H.new_home("operator") / "memo.m4a"
+        shutil.copy(H.fixtures() / "voice-memo.m4a", f)
+        old = time.time() - 600
+        os.utime(f, (old, old))
+        H.cli(home, "ingest", "-p", "first", f)
+        with H.Server(home) as srv:
+            job = srv.json("POST", "/api/ingest-paths", {"paths": [str(f)], "project": "second"})["jobs"][0]
+            done = wait_job(home, job, 120)
+            st = srv.state()
+        self.assertEqual(done["type"], "job.done", done)
+        mid = next(iter(st["media"]))
+        self.assertEqual(done["data"]["result"]["elsewhere"], [{"id": mid, "name": "memo.m4a", "project": "first"}])
+        self.assertEqual(st["media"][mid]["project"], "first")
+
     def test_ingest_paths_waits_for_a_file_still_being_written(self):
         home = H.new_home("settle")
         fx = H.fixtures()

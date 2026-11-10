@@ -35,8 +35,9 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Captions stay clear of platform UI | nothing in the bottom ~20% or the right ~15% of a 9:16 frame |
 | Ending | the last spoken word is complete and is not filler ("yeah", "so", "um") |
 
-`check` also warns (never fails) on a **soft cut**: a first frame after a cut that differs from
-the next while the shot is still (a predicted frame; renders join losslessly, so it should be rare).
+`check` also warns (never fails) on a **soft cut**: the picture changes again the frame after a
+cut, then holds (motion settling, a caption appearing). Usually nothing; look at its strip if it
+reads as a stutter.
 It finds the cut rules' findings in the export's own pixels (the caption band masked) and sound, at
 the timeline's cuts, and puts nine numbered frames around each one on the review sheet
 (`jump-f00283.png`, ...).

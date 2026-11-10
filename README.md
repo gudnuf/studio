@@ -205,7 +205,9 @@ studio agent                      # which agent moments/draft call, the command 
 
 `studio ingest` takes only files that have stopped changing for 3 seconds
 (`STUDIO_SETTLE_SECS`). A file you name that was written a moment ago (a render that just
-finished, a `cp`) is waited for (`wait NAME`); one in inbox/ that's still being AirDropped or
+finished, a `cp`) is waited for (`wait NAME`), up to 60 s (`STUDIO_CLI_SETTLE_WAIT_SECS`; still
+growing after that, it's skipped and ingest exits 1); a modification time in the future (a
+device's clock) counts as finished. One in inbox/ that's still being AirDropped or
 copied prints `skip NAME (still copying…)` and stays there for the next run. A file that can't
 be read, has no picture or sound, is 0 seconds long, or whose end is missing prints
 `skip NAME (reason)` and also stays where it is. Nothing moves into the library before it has
@@ -269,7 +271,7 @@ export's sound at each sound cut): frames that belong to neither shot (`flash`),
 near a cut that isn't in the timeline (`stray`), one-frame black or white pops (`pop`), a jump
 cut between two moments of the same footage with nothing hiding it (`jump`), speech-level sound
 right at a sound cut (`fragment`), a click (`click`), a frame off the 30 fps grid (`held`), and,
-as a warning only, a soft first frame after a cut (`soft`); captions against a fresh
+as a warning only, a picture that changes again the frame after a cut (`soft`); captions against a fresh
 transcription of the export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
 a cartoon, a card) is picture: never a pause. A rule broken on purpose needs an exception,
 granted in words (`studio exception`, QUALITY.md), including the two things nothing measures:

@@ -509,13 +509,15 @@ class H(BaseHTTPRequestHandler):
                                problems=problems)
             finally:
                 up.unlink(missing_ok=True)
-            return prepare(ids, name, problems)
+            return prepare(ids, name, problems, project)
         job = submit("upload", fn, name=name, project=project)
         self.send_json({"job": job})
 
 
-def prepare(ids, name, problems):
-    """After ingest: the local steps for what came in. Shared by uploads and path adds."""
+def prepare(ids, name, problems, project=None):
+    """After ingest: the local steps for what came in. Shared by uploads and path adds. The
+    result names footage that was already in the library under another project (the same
+    bytes stay where they are), so the UI can say where it is."""
     if not ids and problems:           # unreadable footage: say so (toast), don't hide it
         raise RuntimeError(f"couldn't add {name}: {problems[0][1]}")
     job = getattr(S._ctx, "job", None)
@@ -527,7 +529,10 @@ def prepare(ids, name, problems):
     # proxy first (playable in seconds), keyframes right after it, transcription in
     # parallel on the GPU lane
     S.run_pipeline(ids, S.LOCAL_STEPS, quiet=True, on_lane=on_lane)
-    return {"ids": ids}
+    lib = S.library()
+    elsewhere = [{"id": m, "name": lib[m].get("name"), "project": lib[m]["project"]}
+                 for m in ids if project and lib[m]["project"] != project]
+    return {"ids": ids, **({"elsewhere": elsewhere} if elsewhere else {})}
 
 
 # ---------- adding files where they sit (the desktop app's drag and drop) ----------------
@@ -589,7 +594,7 @@ def ingest_paths(paths, project, brand):
             problems = []
             ids = S.ingest([f], brand, project, names={str(f): f.name}, settle=S.SETTLE_SECS,
                            problems=problems, move=False)
-            return prepare(ids, f.name, problems)
+            return prepare(ids, f.name, problems, project)
         jobs.append(submit("upload", fn, name=f.name, project=project, via="path"))
     return {"jobs": jobs, "files": [f.name for f in files],
             "skipped": [{"name": n, "reason": r} for n, r in skipped]}

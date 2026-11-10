@@ -524,6 +524,41 @@ class CLI(unittest.TestCase):
         self.assertIn("1 new, 0 already in the library", r.stdout)
         self.assertNotIn("nothing new", r.stdout)
 
+    def test_ingest_takes_a_file_from_the_future_and_gives_up_on_one_that_keeps_growing(self):
+        import subprocess, sys as _sys, threading
+        home = H.new_home("ingest-clock")
+        src = H.new_home("ingest-clock-src")
+        f = src / "phone clock.m4a"
+        shutil.copy(self.fx / "voice-memo.m4a", f)
+        later = time.time() + 3600                       # a device clock an hour ahead
+        os.utime(f, (later, later))
+        t0 = time.time()
+        r = H.cli(home, "ingest", "-p", "a", f)
+        self.assertLess(time.time() - t0, 20, "a finished file is not waited for")
+        self.assertNotIn("wait ", r.stdout)
+        self.assertIn("1 new, 0 already in the library", r.stdout)
+        # a recording still running: waited for up to the cap, then refused loudly
+        g = src / "still recording.m4a"
+        g.write_bytes((self.fx / "voice-memo.m4a").read_bytes())
+        stop = threading.Event()
+        def grow():
+            while not stop.is_set():
+                with open(g, "ab") as fh:
+                    fh.write(b"\0" * 64)
+                time.sleep(0.2)
+        th = threading.Thread(target=grow, daemon=True)
+        th.start()
+        try:
+            t0 = time.time()
+            r = H.cli(home, "ingest", "-p", "a", g, check=False,
+                      env=H.env_for(home, STUDIO_SETTLE_SECS="1", STUDIO_CLI_SETTLE_WAIT_SECS="2"))
+        finally:
+            stop.set(); th.join()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertLess(time.time() - t0, 20)
+        self.assertIn("skip still recording.m4a (it was still being written after 2s", r.stdout)
+        self.assertIn("0 new, 0 already in the library, 1 skipped", r.stdout)
+
     def test_ingest_never_takes_media_out_of_another_project(self):
         """The same bytes are the same media; ingesting them for another project says where they
         are and leaves them there. Only unsorted footage (the inbox) is sorted on ingest."""
@@ -2059,6 +2094,26 @@ class CutRules(unittest.TestCase):
         fr[30][1] = 0.6
         self.assertIn(("click", 30), self.rules(fr, [self.cut(30, "sound", spoken=(False, False))], s))
 
+    def test_click_where_a_sound_stops_mid_fade_before_the_cut(self):
+        """A loud bed that stops 10 ms before the cut, a third of the way into its fade, then
+        padding: the step is there, not at the quietest point (which is the padding)."""
+        import array, random
+        rnd = random.Random(2)
+        sr, i0 = 16000, 16000
+        s = self.sine(3 * sr, 8000, hz=100)
+        end, fd = i0 - 160, 320                           # sound ends 10 ms early; 20 ms fade
+        for k in range(end - fd // 3 * 2, end):             # fade begun, not finished
+            s[k] = int(s[k] * (1 - (k - (end - fd // 3 * 2)) / fd))
+        for k in range(end, len(s)):
+            s[k] = rnd.randint(-2, 2)
+        k = max(range(end - 100, end), key=lambda k: abs(s[k]))
+        s[end - 1] = s[k]                                   # it stops on a loud sample
+        s = array.array("h", s)
+        fr = self.frames()
+        fr[30][1] = 0.6
+        found = self.rules(fr, [self.cut(30, "sound", spoken=(False, False))], s)
+        self.assertEqual(found, [("click", 30)])
+
 
 @unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")
 class Exact(unittest.TestCase):
@@ -2083,14 +2138,18 @@ class Exact(unittest.TestCase):
                              "color=c=0x3060a0:s=1080x1920:r=30000/1001:d=6[a];color=yellow:s=180x180:r=30000/1001:d=6[b];"
                              "[a][b]overlay=x='t*150':y=300[v]", "-map", "[v]", "-map", "0:a", *enc,
                              str(work / "derived.mp4")], check=True)
+        subprocess.run(ff + ["-f", "lavfi", "-i", "testsrc2=s=1080x1920:r=30:d=4", "-f", "lavfi", "-i",
+                             "sine=frequency=100:sample_rate=48000:d=4,volume=4", "-map", "0:v", "-map", "1:a",
+                             *enc, str(work / "bed.mov")], check=True)
         streams = [x["codec_type"] for x in json.loads(subprocess.run(
             ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(work / "dji.mov")],
             capture_output=True, text=True, check=True).stdout)["streams"]]
         assert "data" in streams, "the DJI stand-in needs its timecode track"
-        H.cli(cls.home, "ingest", "-p", "x", settled(work / "dji.mov"), settled(work / "derived.mp4"))
+        H.cli(cls.home, "ingest", "-p", "x", settled(work / "dji.mov"), settled(work / "derived.mp4"),
+              settled(work / "bed.mov"))
         cls.S = H.import_studio(cls.home)
         ids = {it["name"]: m for m, it in cls.S.state()["media"].items()}
-        cls.d, cls.r = ids["dji.mov"], ids["derived.mp4"]
+        cls.d, cls.r, cls.bed = ids["dji.mov"], ids["derived.mp4"], ids["bed.mov"]
 
     def setUp(self):
         self.S.HOME = self.home
@@ -2135,6 +2194,27 @@ class Exact(unittest.TestCase):
         self.assert_on_grid(pts, n, "covered part")
         self.assertEqual(samples, n * 1600)
         self.assertEqual(types, ["video", "audio"])
+
+    def test_a_clip_rounded_up_fades_out_before_its_padding(self):
+        """A loud bed (100 Hz at half scale) on a clip whose length rounds up to whole frames:
+        the fade out ends where the sound does, so the part never stops mid-fade (a step). Both
+        cases end a quarter period into the tone: at its peak, where a cut-off fade steps most."""
+        import array, subprocess
+        st = self.S.state()
+        out = Path(tempfile.mkdtemp(dir=H.tmp_root()))
+        for k, (a, b, pace) in enumerate([(0.5, 1.5225, 1.0), (0.2025, 3.7125, 1.2)]):
+            n = self.S.frames_of((b - a) / pace)
+            self.assertGreater(n / 30, (b - a) / pace + 0.005, "the case must round up")
+            f = out / f"bed{k}.mov"
+            self.S.render_segment(st["media"][self.bed], a, b, f, pace=pace, frames=n, part=True, voice="off")
+            raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(f), "-vn", "-ac", "1",
+                                  "-f", "s16le", "-"], capture_output=True, check=True).stdout
+            x = array.array("h", raw)
+            self.assertEqual(len(x), n * 1600)
+            tail = x[-int(48000 * 0.02):]
+            step = max(abs(tail[i] - tail[i - 1]) for i in range(1, len(tail))) / 32768
+            self.assertLess(step, 0.01, f"case {k}: a {step:.3f} step in the last 20 ms")
+            self.assertGreater(max(abs(v) for v in x[: len(x) // 2]), 10000, "the bed is loud")
 
     def story(self, name):
         slug = H.cli(self.home, "project", "new", name).stdout.strip().splitlines()[-1]

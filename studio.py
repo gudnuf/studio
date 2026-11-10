@@ -1343,24 +1343,34 @@ def timeline_save(slug, tl, actor="cli", base=None, problems=None):
 # ---------- steps -----------------------------------------------------------
 
 SETTLE_SECS = float(os.environ.get("STUDIO_SETTLE_SECS", 3))
-SETTLE_WAIT_SECS = float(os.environ.get("STUDIO_SETTLE_WAIT_SECS", 900))
+SETTLE_WAIT_SECS = float(os.environ.get("STUDIO_SETTLE_WAIT_SECS", 900))        # the app's drag and drop
+CLI_SETTLE_WAIT_SECS = float(os.environ.get("STUDIO_CLI_SETTLE_WAIT_SECS", 60))  # `studio ingest FILE`
 
-def wait_settled(f, settle=None, on_wait=None):
+def unsettled(st, settle):
+    """Was this file written in the last `settle` seconds? A modification time more than a
+    second in the future (a camera's or phone's clock, `cp -p` from a device) is a finished
+    file, not one being written."""
+    age = time.time() - st.st_mtime
+    return -1.0 <= age < settle
+
+def wait_settled(f, settle=None, on_wait=None, limit=None):
     """A file still being written (AirDrop, a copy from a card, a render that just finished)
     is waited for, not refused: it counts as settled once it hasn't changed for `settle`
     seconds (STUDIO_SETTLE_SECS). on_wait() is called once if it has to wait. Gives up (Skip)
-    after STUDIO_SETTLE_WAIT_SECS."""
+    after `limit` seconds (default STUDIO_SETTLE_WAIT_SECS)."""
     settle = SETTLE_SECS if settle is None else settle
-    end, said = time.time() + SETTLE_WAIT_SECS, False
+    limit = SETTLE_WAIT_SECS if limit is None else limit
+    end, said = time.time() + limit, False
     while True:
         try:
             st = f.stat()
         except FileNotFoundError:
             raise Skip("it's gone")
-        if time.time() - st.st_mtime >= settle:
+        if not unsettled(st, settle):
             return
         if time.time() > end:
-            raise Skip("it's still being copied")
+            raise Skip(f"it was still being written after {limit:g}s; run ingest again when it's "
+                       f"done (STUDIO_CLI_SETTLE_WAIT_SECS waits longer)")
         if not said and on_wait:
             on_wait()
         said = True
@@ -1442,10 +1452,11 @@ def _ingest_one(f, display, brand, project, known, settle, inbox, move_ok=True, 
         st0 = f.stat()
     except FileNotFoundError:
         raise Skip("it's gone")
-    if settle and time.time() - st0.st_mtime < settle:
+    if settle and unsettled(st0, settle):
         if not wait:
             raise Skip("still copying; run ingest again in a moment")
-        wait_settled(f, settle, lambda: print(f"  wait {display} (still being written)", flush=True))
+        wait_settled(f, settle, lambda: print(f"  wait {display} (still being written)", flush=True),
+                     CLI_SETTLE_WAIT_SECS)
         st0 = f.stat()
     if st0.st_size == 0:
         raise Skip("the file is empty")
@@ -2327,9 +2338,9 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     crop_w = min(sw_, even(min(sw_, sh_ * w / h)))
     crop_h = min(sh_, even(min(sh_, sw_ * h / w)))
     gpu_crop = f"crop={crop_w}:{crop_h}" if (crop_w, crop_h) != (sw_, sh_) else None
-    n = frames or frames_of((b - a) / pace)
+    n = frames if frames is not None else frames_of((b - a) / pace)
     # a short fade in and out on every part's audio: no click where two parts meet
-    fades = sound_filter(n, voice, pace)
+    fades = sound_filter(n, voice, pace, (b - a) / pace)
     rate = frame_rate(pace)
 
     def build(use_hw):
@@ -2370,16 +2381,19 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     finally:
         ass.unlink(missing_ok=True)
 
-def sound_filter(frames, voice="off", pace=1.0):
+def sound_filter(frames, voice="off", pace=1.0, length=None):
     """A part's audio filter for `frames` export frames of sound: the pace (atempo keeps the
     pitch), the voice treatment (if any), a short fade in and out (no click where two parts
     meet), then exactly frames * SR / FPS samples: padded with silence or cut, never longer
-    than the picture (a longer sound made the join hold the last frame before every cut)."""
+    than the picture (a longer sound made the join hold the last frame before every cut).
+    length: how long the sound really is on the export's clock ((out - in) / pace). The fade
+    out ends there, before any padding: a clip rounded up a few ms must not stop mid-fade."""
     d = frames / FPS
-    fd = min(FADE, d / 4)
+    end = min(d, length) if length else d
+    fd = min(FADE, end / 4)
     chain = ["asetpts=PTS-STARTPTS"] + ([f"atempo={pace:g}"] if pace != 1.0 else []) + [f"aresample={SR}"]
     chain += [VOICE_CHAINS[voice]] if voice in VOICE_CHAINS else []
-    chain += [f"afade=t=in:d={fd:.3f}", f"afade=t=out:st={max(0.0, d - fd):.4f}:d={fd:.3f}",
+    chain += [f"afade=t=in:d={fd:.3f}", f"afade=t=out:st={max(0.0, end - fd):.4f}:d={fd:.3f}",
               "apad", f"atrim=end_sample={frames * SR // FPS}"]
     return ",".join(chain)
 
@@ -2441,7 +2455,7 @@ def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=Non
         else:
             cmd += ["-f", "lavfi", "-t", str(b - a), "-i", f"anullsrc=r={SR}:cl=stereo"]
             amap = ["-map", "0:v:0", "-map", "2:a:0"]
-        sh(cmd + [*amap, "-c:v", "copy", "-frames:v", str(n), "-af", sound_filter(n, voice, pace),
+        sh(cmd + [*amap, "-c:v", "copy", "-frames:v", str(n), "-af", sound_filter(n, voice, pace, (b - a) / pace),
                   *part_audio(True), "-ar", str(SR), "-ac", "2", *NO_TMCD, out.name], cwd=out.parent)
     finally:
         for x in pics:
@@ -2894,7 +2908,7 @@ CUT_RULES = {        # rule: (what passing means, hard)
     "fragment": ("no clipped word or breath at a sound cut", True),
     "click": ("no click at a cut", True),
     "held": (f"every frame on the {FPS} fps grid (none held at a cut)", True),
-    "soft": ("a clean first frame after every cut", False),
+    "soft": ("the picture settles at once after every cut", False),
 }
 
 def scan_picture(path):
@@ -3002,8 +3016,9 @@ def cut_findings(frames, cuts=None, samples=None, sr=16000):
                 add("jump", f, f"the same shot either side of the cut (change {sc:.2f}) and nothing "
                                f"hides it: cover it, punch in, or cut elsewhere", i)
             if f + 2 < n and scene[f + 1] >= SOFT_STEP and scene[f + 2] < SOFT_STILL:
-                add("soft", f + 1, f"the first frame after the cut differs from the next by "
-                                   f"{scene[f + 1]:.2f} while the shot is still (a predicted frame)", i)
+                add("soft", f + 1, f"the picture changes again the frame after the cut ({scene[f + 1]:.2f}: "
+                                   f"motion settling or a caption appearing), then holds; look at the "
+                                   f"strip if it reads as a stutter", i)
 
     # one-frame pops to black or white
     lo, hi = POP_LUMA
@@ -3035,6 +3050,10 @@ def cut_findings(frames, cuts=None, samples=None, sr=16000):
         w4, w30, w2, w5 = int(sr * 0.004), int(sr * 0.03), int(sr * 0.002), int(sr * 0.005)
         def steps(a, b):
             return max((abs(s[k] - s[k - 1]) for k in range(max(1, a), min(len(s), b))), default=0) / 32768
+        def step_at(a, b):          # (biggest step, where)
+            ks = range(max(1, a), min(len(s), b))
+            k = max(ks, key=lambda k: abs(s[k] - s[k - 1]), default=a)
+            return (abs(s[k] - s[k - 1]) / 32768 if ks else 0.0), k
         for i, c in enumerate(cuts):
             if c["kind"] not in ("sound", "pause"):
                 continue
@@ -3055,12 +3074,14 @@ def cut_findings(frames, cuts=None, samples=None, sr=16000):
                 add("fragment", f, f"speech-level sound {side} the cut at {j / sr:.3f}s ({v:.0f} dBFS, "
                                    f"floor {floor:.0f}): a clipped word or breath, or too short a "
                                    f"{'tail' if side == 'before' else 'lead-in'}", i)
-            peak = steps(j - w2, j + w2)
+            # a click is looked for at the join and in the 20 ms before the cut, where a part's
+            # sound ends (a sound stopping mid-fade is a step there, not at the quietest point)
+            peak, at = max(step_at(j - w2, j + w2), step_at(i0 - int(sr * 0.02), i0 + w2))
             ref = sorted(steps(k, k + w5) for k in range(j - int(sr * 0.2), j + int(sr * 0.2), w5)
                          if abs(k - j) >= w5 and k >= 1 and k + w5 < len(s))
             med = ref[len(ref) // 2] if ref else 1.0
             if peak >= CLICK_MIN and peak >= CLICK_RATIO * med:
-                add("click", f, f"a sample step of {peak:.3f} at {j / sr:.3f}s, {peak / max(med, 1e-6):.0f}x "
+                add("click", f, f"a sample step of {peak:.3f} at {at / sr:.3f}s, {peak / max(med, 1e-6):.0f}x "
                                 f"the steps around it: a click", i)
     out.sort(key=lambda x: (x["frame"], x["rule"]))
     return out
