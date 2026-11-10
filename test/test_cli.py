@@ -8,7 +8,7 @@ whisper / keyframes steps); each test then works in its own project. The CLI tes
 call an agent: moments.json is written by hand and step.moments emitted through the studio
 module. The Agents tests run moments/draft through fake agents (test/fakeagents).
 """
-import json, os, shutil, sys, tempfile, time, unittest
+import json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2328,6 +2328,87 @@ class Exact(unittest.TestCase):
         self.assertTrue(set(starts) <= keys, f"cuts {starts}, key frames {sorted(keys)}")
         pts, _, _ = self.av(f)
         self.assert_on_grid(pts, sum(self.S.clip_frames(c) for c in tl["timeline"]["clips"]), "re-encoded export")
+
+
+class Golden(unittest.TestCase):
+    """docs/events.md + test/golden/fold: the contract a port is held to (plan task 0.2)."""
+    G = H.ROOT / "test" / "golden" / "fold"
+
+    def test_golden_fold_is_current_and_reproducible(self):
+        """make-golden --check refolds both logs and rebuilds the seeded one in a temp dir:
+        byte-identical to what is committed (so: deterministic, and the fold didn't drift)."""
+        r = subprocess.run(["bash", str(H.TEST_DIR / "make-golden.sh"), "--check"],
+                           capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_state_json_is_the_fold(self):
+        home = H.new_home("state-json")
+        shutil.copy(self.G / "seeded.events.jsonl", home / "events.jsonl")
+        out = H.cli(home, "state", "--json").stdout
+        self.assertEqual(json.loads(out), json.loads(json.dumps(H.import_studio(home).state())))
+        self.assertEqual(out, json.dumps(json.loads(out), sort_keys=True, indent=1, ensure_ascii=False) + "\n")
+
+    def test_every_logged_type_is_in_the_contract(self):
+        doc = (H.ROOT / "docs" / "events.md").read_text()
+        for f in ("real.events.jsonl", "seeded.events.jsonl"):
+            types = {json.loads(l)["type"] for l in (self.G / f).read_text().splitlines() if l.strip()}
+            self.assertEqual([t for t in sorted(types) if f"`{t}`" not in doc], [], f)
+
+    def test_seeded_fixture_covers_the_v2_shapes(self):
+        st = json.loads((self.G / "seeded.state.json").read_text())
+        a, b = st["projects"]["sparks-opener"], st["projects"]["paperwork-reel"]
+        self.assertEqual([e["verdict"]["state"] for e in a["exports"]], ["failed", "ready"])
+        self.assertTrue(a["ready"])
+        self.assertTrue(any(x.get("revoked") for x in a["exceptions"].values()))
+        self.assertTrue(any(x["actor"] == "agent" and not x.get("revoked") for x in a["exceptions"].values()))
+        self.assertEqual(len(a["rounds"]), 1)
+        self.assertEqual(b["shelved"]["actor"], "operator")
+        self.assertEqual(b["exports"][0]["verdict"]["state"], "unchecked")
+
+    def test_scrub_is_keyed_and_field_level(self):
+        """test/scrub.py: no key, no scrub; with one, nothing under a structural key ships verbatim
+        (a file name inside note.focus.media, an export name in choice.shown), digits in free text
+        are scrubbed, and the placeholders change with the key."""
+        d = Path(tempfile.mkdtemp(prefix="studio-scrub-", dir=H.tmp_root()))
+        sha = "ab" * 32
+        evs = [{"ts": "2026-11-09T10:00:00-08:00", "type": "ingested", "media": sha[:12],
+                "data": {"name": "IMG_0001.MOV", "sha256": sha, "path": "/Users/x/Studio/media/a/source.mov",
+                         "project": "jefe-paperwork", "duration": 3.0}},
+               {"ts": "2026-11-09T10:00:01-08:00", "type": "note", "media": None,
+                "data": {"text": "call 555 0199 about 12 Example Rd", "id": "0a1b2c3d", "actor": "operator",
+                         "focus": {"media": {"id": sha[:12], "name": "IMG_0001.MOV"}}}},
+               {"ts": "2026-11-09T10:00:02-08:00", "type": "choice", "media": None,
+                "data": {"project": "jefe-paperwork", "kind": "version", "actor": "agent",
+                         "shown": [sha, "jefe-paperwork-20261109-120000-9x16.mp4"], "chosen": sha}}]
+        src = d / "in.jsonl"
+        src.write_text("".join(json.dumps(e) + "\n" for e in evs))
+        env = {k: v for k, v in os.environ.items() if k != "STUDIO_SCRUB_KEY"} | {"HOME": str(d)}
+        run = lambda out, **e: subprocess.run([sys.executable, str(H.TEST_DIR / "scrub.py"), str(src), str(d / out)],
+                                              capture_output=True, text=True, env=env | e)
+        self.assertNotEqual(run("nokey.jsonl").returncode, 0, "scrubbed without a key")
+        self.assertFalse((d / "nokey.jsonl").exists())
+        r1, r2 = run("k1.jsonl", STUDIO_SCRUB_KEY="1" * 64), run("k2.jsonl", STUDIO_SCRUB_KEY="2" * 64)
+        self.assertEqual((r1.returncode, r2.returncode), (0, 0), r1.stderr + r2.stderr)
+        out = (d / "k1.jsonl").read_text()
+        for word in ("IMG", "0001", "MOV", "jefe-paperwork", "Example", "12 ", "555", "0199", "120000", "Users"):
+            self.assertNotIn(word, out)
+        a = [json.loads(l) for l in out.splitlines()]
+        self.assertEqual(a[0]["data"]["project"], a[2]["data"]["project"], "one word map for the whole log")
+        self.assertEqual(a[0]["media"], a[0]["data"]["sha256"][:12], "a media id stays its sha256's prefix")
+        self.assertNotEqual(a[0]["data"]["sha256"], sha)
+        self.assertEqual(a[2]["data"]["chosen"], a[0]["data"]["sha256"])
+        self.assertEqual((a[2]["data"]["kind"], a[2]["data"]["actor"]), ("version", "agent"))
+        self.assertTrue(all(len(t) == 6 and t.islower() for t in a[1]["data"]["text"].split()))
+        self.assertNotEqual(out, (d / "k2.jsonl").read_text(), "placeholders must depend on the key")
+
+    def test_scrubbed_log_has_no_free_text(self):
+        """Every note in the real fixture is placeholder text: consonant tokens, punctuation and
+        (mapped) hex ids the note mentions."""
+        notes = [json.loads(l)["data"]["text"] for l in (self.G / "real.events.jsonl").read_text().splitlines()
+                 if '"type": "note"' in l]
+        self.assertTrue(notes)
+        for t in notes:
+            self.assertNotRegex(re.sub(r"\b[0-9a-f]{8,64}\b", "", t).lower(), r"[aeiouy0-9]", t)
 
 
 if __name__ == "__main__":

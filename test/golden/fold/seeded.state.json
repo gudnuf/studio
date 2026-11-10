@@ -1,0 +1,589 @@
+{
+ "jobs": {
+  "1794150000-1": {
+   "job": "1794150000-1",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "sparks-opener",
+   "result": {
+    "file": "projects/sparks-opener/exports/sparks-opener-20261109-090100-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "2026-11-09T09:03:16-08:00"
+  },
+  "1794150000-2": {
+   "job": "1794150000-2",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "sparks-opener",
+   "result": {
+    "file": "projects/sparks-opener/exports/sparks-opener-20261109-090200-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "2026-11-09T09:04:19-08:00"
+  },
+  "1794150000-3": {
+   "job": "1794150000-3",
+   "kind": "render",
+   "parts": {
+    "render": 50.0
+   },
+   "project": "paperwork-reel",
+   "result": {
+    "file": "projects/paperwork-reel/exports/paperwork-reel-20261109-090300-9x16.mp4"
+   },
+   "status": "done",
+   "ts": "2026-11-09T09:06:18-08:00"
+  },
+  "1794150000-9": {
+   "error": "server restarted",
+   "job": "1794150000-9",
+   "kind": "check",
+   "project": "sparks-opener",
+   "status": "failed",
+   "ts": "2026-11-09T09:05:01-08:00"
+  }
+ },
+ "media": {
+  "08c9ea761225": {
+   "brand": "jefe",
+   "draft_edits": {
+    "1": {
+     "short": "Two hours a night, back."
+    }
+   },
+   "duration": 45.0,
+   "has_audio": true,
+   "has_video": true,
+   "height": 1920,
+   "id": "08c9ea761225",
+   "name": "talking.mov",
+   "path": "$STUDIO_HOME/media/08c9ea761225/source.mov",
+   "project": "sparks-opener",
+   "sha256": "08c9ea7612254aeb3381160530a3630a0088582c2165b7817673caafcb7752d5",
+   "steps": {
+    "draft": {
+     "posts": 2,
+     "provenance": {
+      "model": "claude-opus-5-5",
+      "prompt": "ba9876543210",
+      "provider": "claude"
+     },
+     "sha256": "b65ee430401ba4de3543576c714d72eadde6bc9c9f8577dbed52ef232822f203"
+    },
+    "keyframes": {
+     "every": 1.0,
+     "frames": 45
+    },
+    "moments": {
+     "moments": 2,
+     "provenance": {
+      "model": "claude-opus-5-5",
+      "prompt": "0123456789ab",
+      "provider": "claude"
+     },
+     "sha256": "8b1564b9b43bfbbcc3ba9d163c88647b19448e1a0fcd3c5b66a7be2bc565e80d"
+    },
+    "proxy": {
+     "chunks": 4,
+     "encoder": "h264_videotoolbox",
+     "file": "proxy.mp4",
+     "sha256": "654f8b4c0e8015899515e17a6a61314c2c92dfb4f330aa1a677c7a189d17e06b"
+    },
+    "speech": {
+     "regions": 9,
+     "sha256": "214fbe2bf4d8aae318db9f0488dc481ca8102f88e394af68a19a2be11333eeea",
+     "speech_s": 31.4
+    },
+    "transcribe": {
+     "dropped": [
+      "thank you"
+     ],
+     "edits": 1,
+     "fixed": 1,
+     "segments": 12,
+     "sha256": "ee440cdcaccb9dc18810c5ab5c98ca88553686f1fbd065c7bad403800a4e5299",
+     "words": 96
+    }
+   },
+   "width": 1080
+  },
+  "3ef5c6425b7d": {
+   "brand": "jefe",
+   "duration": 20.0,
+   "error": {
+    "error": "whisper-cli failed (1): model not found",
+    "step": "transcribe"
+   },
+   "has_audio": true,
+   "has_video": false,
+   "height": 0,
+   "id": "3ef5c6425b7d",
+   "name": "memo.m4a",
+   "path": "$STUDIO_HOME/media/3ef5c6425b7d/source.m4a",
+   "project": "paperwork-reel",
+   "sha256": "3ef5c6425b7df140708a1b1bd04f0ee72ba623d44f812d22ed9c7dffc4fb8bf0",
+   "steps": {},
+   "width": 0
+  },
+  "a78e65aab386": {
+   "brand": "jefe",
+   "duration": 30.0,
+   "has_audio": true,
+   "has_video": true,
+   "height": 1080,
+   "id": "a78e65aab386",
+   "name": "broll.mov",
+   "path": "$STUDIO_HOME/media/a78e65aab386/source.mov",
+   "project": "sparks-opener",
+   "sha256": "a78e65aab3862eeeb23d507b5dacfe202cb1b177f68fa9aa1b470859f110a0b8",
+   "steps": {
+    "proxy": {
+     "chunks": 4,
+     "encoder": "h264_videotoolbox",
+     "file": "proxy.mp4",
+     "sha256": "18ba87d066fb245c762f33c9dc54a3e6ad2898cf221e53361686da6eeb488eff"
+    },
+    "speech": {
+     "regions": 0,
+     "skipped": "no speech"
+    }
+   },
+   "width": 1920
+  }
+ },
+ "notes": [
+  {
+   "acked": "2026-11-09T09:05:43-08:00",
+   "actor": "operator",
+   "focus": {
+    "at": 9.4,
+    "project": "sparks-opener",
+    "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f"
+   },
+   "id": "ca431b00",
+   "project": "sparks-opener",
+   "text": "the cover comes in late",
+   "ts": "2026-11-09T09:05:36-08:00"
+  },
+  {
+   "actor": "agent",
+   "id": "5185941c",
+   "project": "sparks-opener",
+   "re": "ca431b00",
+   "text": "Moved the cover in by half a second.",
+   "ts": "2026-11-09T09:05:50-08:00"
+  },
+  {
+   "actor": "operator",
+   "id": "2e256840",
+   "project": "sparks-opener",
+   "text": "and the end card?",
+   "ts": "2026-11-09T09:05:57-08:00"
+  }
+ ],
+ "progress": {
+  "a78e65aab386": {
+   "pct": 55.5,
+   "step": "keyframes",
+   "ts": "2026-11-09T09:01:52-08:00"
+  }
+ },
+ "projects": {
+  "paperwork-reel": {
+   "brand": "jefe",
+   "created": "2026-11-09T09:00:14-08:00",
+   "exports": [
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 1,
+     "concat": "copy",
+     "cuts": [],
+     "duration": 7.0,
+     "file": "projects/paperwork-reel/exports/paperwork-reel-20261109-090300-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "paperwork-reel",
+     "secs": 12.5,
+     "sha256": "c6100440bf93b94a178a0c09509da27cd3869be6edea01f9fddd55f6a04476ed",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": false,
+      "clips": [
+       {
+        "id": "b2000001",
+        "in": 5.0,
+        "media": "a78e65aab386",
+        "out": 12.0
+       }
+      ]
+     },
+     "ts": "2026-11-09T09:06:32-08:00",
+     "verdict": {
+      "state": "unchecked",
+      "why": "not checked (studio check)"
+     }
+    }
+   ],
+   "name": "Paperwork reel",
+   "ready": false,
+   "rev": 1,
+   "rev_actor": "agent",
+   "shelved": {
+    "actor": "operator",
+    "ts": "2026-11-09T09:06:46-08:00",
+    "why": "not a reel: no line to open on"
+   },
+   "slug": "paperwork-reel",
+   "timeline": {
+    "aspect": "9:16",
+    "captions": false,
+    "clips": [
+     {
+      "id": "b2000001",
+      "in": 5.0,
+      "media": "a78e65aab386",
+      "out": 12.0
+     }
+    ]
+   }
+  },
+  "sparks-opener": {
+   "brand": "jefe",
+   "checks": {
+    "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f": {
+     "actor": "agent",
+     "failed": [
+      "pauses"
+     ],
+     "failures": [
+      {
+       "clip": "a1000002",
+       "fp": "e50fa724c6da92fa",
+       "item": "0.55s pause at 9.40s (clip 2)",
+       "reel": "362b4a0b0676e8f7",
+       "rule": "pauses"
+      }
+     ],
+     "file": "projects/sparks-opener/exports/sparks-opener-20261109-090200-9x16.mp4",
+     "ok": false,
+     "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
+     "ts": "2026-11-09T09:04:47-08:00"
+    },
+    "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae": {
+     "actor": "agent",
+     "failed": [
+      "pauses",
+      "picture"
+     ],
+     "failures": [
+      {
+       "clip": "a1000002",
+       "fp": "e50fa724c6da92fa",
+       "item": "0.55s pause at 9.40s (clip 2)",
+       "reel": "362b4a0b0676e8f7",
+       "rule": "pauses"
+      },
+      {
+       "clip": "a1000003",
+       "fp": "8f0dd61863e8023a",
+       "item": "black 14.0-14.2s",
+       "reel": "362b4a0b0676e8f7",
+       "rule": "picture"
+      }
+     ],
+     "file": "projects/sparks-opener/exports/sparks-opener-20261109-090100-9x16.mp4",
+     "ok": false,
+     "sha256": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae",
+     "ts": "2026-11-09T09:03:44-08:00"
+    }
+   },
+   "created": "2026-11-09T09:00:07-08:00",
+   "exceptions": {
+    "17ae71fb": {
+     "actor": "agent",
+     "brand": "jefe",
+     "clip": "a1000003",
+     "fp": "8f0dd61863e8023a",
+     "id": "17ae71fb",
+     "kind": "card",
+     "project": "sparks-opener",
+     "revoked": {
+      "actor": "operator",
+      "ts": "2026-11-09T09:04:05-08:00",
+      "why": "that is not a card, it is a dropped frame"
+     },
+     "rule": "picture",
+     "ts": "2026-11-09T09:03:58-08:00",
+     "why": "a designed card, the dark ground is meant"
+    },
+    "9923eddf": {
+     "actor": "agent",
+     "brand": "jefe",
+     "clip": "a1000002",
+     "fp": "e50fa724c6da92fa",
+     "id": "9923eddf",
+     "project": "sparks-opener",
+     "rule": "pauses",
+     "ts": "2026-11-09T09:03:51-08:00",
+     "why": "the held beat lands the line; the picture carries it"
+    }
+   },
+   "exports": [
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 3,
+     "concat": "copy",
+     "cuts": [
+      {
+       "at": 7.5,
+       "clip": 1,
+       "frame": 225,
+       "kind": "sound",
+       "same": true
+      },
+      {
+       "at": 13.867,
+       "clip": 2,
+       "frame": 416,
+       "kind": "sound",
+       "same": false
+      }
+     ],
+     "duration": 16.87,
+     "file": "projects/sparks-opener/exports/sparks-opener-20261109-090100-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "sparks-opener",
+     "secs": 12.5,
+     "sha256": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": true,
+      "clips": [
+       {
+        "id": "a1000001",
+        "in": 2.0,
+        "label": "hook",
+        "media": "08c9ea761225",
+        "moment": 1,
+        "out": 9.5
+       },
+       {
+        "cover": [
+         {
+          "at": 1.0,
+          "in": 3.0,
+          "media": "a78e65aab386",
+          "out": 6.0
+         }
+        ],
+        "id": "a1000002",
+        "in": 12.0,
+        "media": "08c9ea761225",
+        "out": 19.0,
+        "pace": 1.1
+       },
+       {
+        "fit": "fill",
+        "id": "a1000003",
+        "in": 0.0,
+        "media": "a78e65aab386",
+        "out": 3.0
+       }
+      ],
+      "voice": "natural"
+     },
+     "ts": "2026-11-09T09:03:30-08:00",
+     "verdict": {
+      "by": "agent",
+      "checked": "2026-11-09T09:03:44-08:00",
+      "excepted": [
+       {
+        "by": "agent",
+        "clip": "a1000002",
+        "exception": "9923eddf",
+        "fp": "e50fa724c6da92fa",
+        "item": "0.55s pause at 9.40s (clip 2)",
+        "reel": "362b4a0b0676e8f7",
+        "rule": "pauses",
+        "why": "the held beat lands the line; the picture carries it"
+       }
+      ],
+      "failed": [
+       "picture"
+      ],
+      "open": [
+       {
+        "clip": "a1000003",
+        "fp": "8f0dd61863e8023a",
+        "item": "black 14.0-14.2s",
+        "reel": "362b4a0b0676e8f7",
+        "rule": "picture"
+       }
+      ],
+      "state": "failed"
+     }
+    },
+    {
+     "actor": "agent",
+     "aspect": "9:16",
+     "clips": 3,
+     "concat": "copy",
+     "cuts": [
+      {
+       "at": 7.5,
+       "clip": 1,
+       "frame": 225,
+       "kind": "sound",
+       "same": true
+      },
+      {
+       "at": 13.867,
+       "clip": 2,
+       "frame": 416,
+       "kind": "sound",
+       "same": false
+      }
+     ],
+     "duration": 16.87,
+     "file": "projects/sparks-opener/exports/sparks-opener-20261109-090200-9x16.mp4",
+     "loudness": {
+      "input_i": -19.2,
+      "input_tp": -3.1,
+      "normalized": true
+     },
+     "project": "sparks-opener",
+     "secs": 12.5,
+     "sha256": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
+     "timeline": {
+      "aspect": "9:16",
+      "captions": true,
+      "clips": [
+       {
+        "id": "a1000001",
+        "in": 2.0,
+        "label": "hook",
+        "media": "08c9ea761225",
+        "moment": 1,
+        "out": 9.5
+       },
+       {
+        "cover": [
+         {
+          "at": 1.0,
+          "in": 3.0,
+          "media": "a78e65aab386",
+          "out": 6.0
+         }
+        ],
+        "id": "a1000002",
+        "in": 12.0,
+        "media": "08c9ea761225",
+        "out": 19.0,
+        "pace": 1.1
+       },
+       {
+        "fit": "fill",
+        "id": "a1000003",
+        "in": 0.0,
+        "media": "a78e65aab386",
+        "out": 3.0
+       }
+      ],
+      "voice": "natural"
+     },
+     "ts": "2026-11-09T09:04:33-08:00",
+     "verdict": {
+      "by": "agent",
+      "checked": "2026-11-09T09:04:47-08:00",
+      "excepted": [
+       {
+        "by": "agent",
+        "clip": "a1000002",
+        "exception": "9923eddf",
+        "fp": "e50fa724c6da92fa",
+        "item": "0.55s pause at 9.40s (clip 2)",
+        "reel": "362b4a0b0676e8f7",
+        "rule": "pauses",
+        "why": "the held beat lands the line; the picture carries it"
+       }
+      ],
+      "failed": [],
+      "open": [],
+      "state": "ready"
+     }
+    }
+   ],
+   "name": "Sparks opener",
+   "ready": true,
+   "rev": 2,
+   "rev_actor": "agent",
+   "rounds": {
+    "5dbd6ca0": {
+     "actor": "operator",
+     "brand": "jefe",
+     "dir": "projects/sparks-opener/blind/5dbd6ca0",
+     "kind": "version",
+     "labels": {
+      "A": "1e8c33e3066f1edf1dd71720c9d824d8f17fb670a4ab8d7e6b1247d8487a172f",
+      "B": "a63867b664b7312f4ebd882e2f144edd5eda1116e38f1897cd3c03983fa45bae"
+     },
+     "project": "sparks-opener",
+     "round": "5dbd6ca0",
+     "ts": "2026-11-09T09:05:15-08:00"
+    }
+   },
+   "slug": "sparks-opener",
+   "timeline": {
+    "aspect": "9:16",
+    "captions": true,
+    "clips": [
+     {
+      "id": "a1000001",
+      "in": 2.0,
+      "label": "hook",
+      "media": "08c9ea761225",
+      "moment": 1,
+      "out": 9.5
+     },
+     {
+      "cover": [
+       {
+        "at": 1.0,
+        "in": 3.0,
+        "media": "a78e65aab386",
+        "out": 6.0
+       }
+      ],
+      "id": "a1000002",
+      "in": 12.0,
+      "media": "08c9ea761225",
+      "out": 19.0,
+      "pace": 1.1
+     },
+     {
+      "fit": "fill",
+      "id": "a1000003",
+      "in": 0.0,
+      "media": "a78e65aab386",
+      "out": 3.0
+     }
+    ],
+    "voice": "natural"
+   }
+  }
+ }
+}

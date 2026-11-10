@@ -258,6 +258,8 @@ def _apply(acc, ev):
             x["revoked"] = {"ts": ev["ts"], "actor": d.get("actor"), "why": d.get("why")}
     elif t == "blind.round" and d.get("project") in projects:
         projects[d["project"]].setdefault("rounds", {})[d["round"]] = {**d, "ts": ev["ts"]}
+    elif t == "project.shelved" and d.get("project") in projects:
+        projects[d["project"]]["shelved"] = {"ts": ev["ts"], "why": d.get("why"), "actor": d.get("actor")}
 
 def _finish(acc):
     st = copy.deepcopy(acc)
@@ -4947,6 +4949,8 @@ def main():
                    help="don't make previews now (the studio makes them when it next starts)")
     p = sub.add_parser("ls"); p.add_argument("-p", "--project")
     p = sub.add_parser("log"); p.add_argument("-n", type=int, default=20)
+    p = sub.add_parser("state", help="the folded state (docs/events.md §5), as JSON with sorted keys")
+    p.add_argument("--json", action="store_true", help="JSON (the only format; accepted for symmetry)")
     sub.add_parser("agent", help="which agent moments/draft call, and the command line")
     a = ap.parse_args()
 
@@ -5053,6 +5057,8 @@ def main():
     elif a.cmd == "log":
         for ev in tail_events(a.n, skip=("job.progress",)):
             print(ev["ts"], ev["type"], ev["media"] or "-", json.dumps(ev["data"])[:120])
+    elif a.cmd == "state":
+        print(json.dumps(state(), sort_keys=True, indent=1, ensure_ascii=False))
     elif a.cmd == "agent":
         info = agent_info()
         if not info["name"]:
