@@ -12,15 +12,17 @@ processes:
     working_dir: ${STUDIO_INFRA_STATE}/relay
     log_location: ${STUDIO_INFRA_STATE}/relay/relay.log
     environment:
-      - "RUST_LOG=warn,nostr_rs_relay=info"
+      - "RUST_LOG=warn"   # the readiness probe would log a connect/close pair at info
     readiness_probe:
       http_get:
         host: 127.0.0.1
         port: ${STUDIO_INFRA_RELAY_PORT}
         path: /
-      initial_delay_seconds: 0
-      period_seconds: 1
-      failure_threshold: 30
+      # readiness only colours the TUI (nothing depends_on it); probing keeps going after ready,
+      # so probe rarely
+      initial_delay_seconds: 2
+      period_seconds: 60
+      failure_threshold: 5
     availability:
       restart: on_failure
       backoff_seconds: 2
@@ -39,9 +41,9 @@ processes:
         port: ${STUDIO_INFRA_BLOSSOM_PORT}
         # the landing page is off, so / is a 404; the static favicon is a cheap 200
         path: /favicon.ico
-      initial_delay_seconds: 0
-      period_seconds: 1
-      failure_threshold: 60
+      initial_delay_seconds: 3
+      period_seconds: 60
+      failure_threshold: 5
     availability:
       restart: on_failure
       backoff_seconds: 2

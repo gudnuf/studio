@@ -1,4 +1,6 @@
-# The studio's nostr relay as a module pair over nostr-rs-relay (nixpkgs, 0.10.0).
+# The studio's nostr relay as a module pair over nostr-rs-relay 0.10.0, pinned: the default package
+# comes from the studio flake's own nixpkgs (`packages.nostr-rs-relay`), not the importing host's,
+# so a deploy runs the version S4 measured. `package` stays overridable.
 #
 #   nixos  -> services.studio-relay, a hardened systemd service (+ nginx/ACME when `domain` is set)
 #   darwin -> services.studio-relay, a launchd daemon running as `user`
@@ -17,10 +19,16 @@
 # `pubkeyWhitelist` (the library pubkey from `studio pair`). Everything else keeps its default.
 # See docs/sync.md "Deploying".
 # ──────────────────────────────────────────────────────────────────────────────────────────────
+{ relayFor }:
 let
-  options = { lib, pkgs, darwin }: {
+  options = { lib, pkgs, config, darwin }: {
     enable = lib.mkEnableOption "the studio's nostr relay (nostr-rs-relay)";
-    package = lib.mkPackageOption pkgs "nostr-rs-relay" { };
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = relayFor pkgs;
+      defaultText = lib.literalExpression "studio.packages.\${system}.nostr-rs-relay";
+      description = "nostr-rs-relay. Defaults to the studio flake's pin (0.10.0), whatever the host's nixpkgs has.";
+    };
     address = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1";
@@ -60,7 +68,8 @@ let
       example = "relay.example.org";
       description = ''
         Public name. Sets the advertised relay_url (wss://DOMAIN/) and, on NixOS, an nginx virtual
-        host proxying to the relay. # CHIRA SEAM
+        host proxying to the relay; NixOS requires `acme` with it, so wss:// is never advertised
+        over plain http. On darwin a reverse proxy with TLS must front it. # CHIRA SEAM
       '';
     };
     acme = lib.mkOption {
@@ -78,10 +87,11 @@ let
     };
   } // lib.optionalAttrs darwin {
     user = lib.mkOption {
-      type = lib.types.str;
-      default = "root";
+      type = lib.types.nullOr lib.types.str;
+      default = config.system.primaryUser or null;
+      defaultText = lib.literalExpression "config.system.primaryUser";
       example = "claude";
-      description = "Darwin: the user the launchd daemon runs as and who owns `dataDir`.";
+      description = "Darwin: the user the launchd daemon runs as and who owns `dataDir`. Never root.";
     };
   };
 
@@ -93,7 +103,8 @@ let
       description = "The studio's library relay.";
     };
     database.data_directory = cfg.dataDir;
-    network = { address = cfg.address; port = cfg.port; }
+    # ping idle websockets well inside any proxy's read timeout (nginx's default is 60 s)
+    network = { address = cfg.address; port = cfg.port; ping_interval = 30; }
       // lib.optionalAttrs (cfg.domain != null) { remote_ip_header = "x-forwarded-for"; };
     options.reject_future_seconds = 1800;
     limits = {
@@ -113,6 +124,9 @@ let
   assertions = cfg: [
     { assertion = cfg.acme -> cfg.domain != null; message = "services.studio-relay.acme needs services.studio-relay.domain"; }
   ];
+  darwinAssertions = cfg: [
+    { assertion = cfg.user != null && cfg.user != "root"; message = "services.studio-relay.user: set a non-root user (no system.primaryUser to default to)"; }
+  ];
 in
 {
   inherit configFor;
@@ -120,10 +134,12 @@ in
   nixos = { config, lib, pkgs, ... }:
     let cfg = config.services.studio-relay;
     in {
-      options.services.studio-relay = options { inherit lib pkgs; darwin = false; };
+      options.services.studio-relay = options { inherit lib pkgs config; darwin = false; };
 
       config = lib.mkIf cfg.enable {
-        assertions = assertions cfg;
+        assertions = assertions cfg ++ [
+          { assertion = cfg.domain != null -> cfg.acme; message = "services.studio-relay.domain needs acme = true on NixOS (it advertises wss://)"; }
+        ];
 
         users.users.studio-relay = { isSystemUser = true; group = "studio-relay"; home = cfg.dataDir; };
         users.groups.studio-relay = { };
@@ -138,6 +154,7 @@ in
             User = "studio-relay";
             Group = "studio-relay";
             Restart = "on-failure";
+            UMask = "0077";
             ReadWritePaths = [ cfg.dataDir ];
             PrivateTmp = true;
             PrivateDevices = true;
@@ -151,6 +168,13 @@ in
             RestrictSUIDSGID = true;
             CapabilityBoundingSet = "";
             SystemCallFilter = [ "@system-service" ];
+            SystemCallArchitectures = "native";
+            RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+            RestrictNamespaces = true;
+            RestrictRealtime = true;
+            ProtectClock = true;
+            ProtectHostname = true;
+            ProtectProc = "invisible";
           };
         };
 
@@ -163,6 +187,11 @@ in
             locations."/" = {
               proxyPass = "http://${if cfg.address == "0.0.0.0" then "127.0.0.1" else cfg.address}:${toString cfg.port}";
               proxyWebsockets = true;
+              # long-lived subscriptions; the relay pings every 30 s anyway
+              extraConfig = ''
+                proxy_read_timeout 1h;
+                proxy_send_timeout 1h;
+              '';
             };
           };
         };
@@ -173,10 +202,10 @@ in
   darwin = { config, lib, pkgs, ... }:
     let cfg = config.services.studio-relay;
     in {
-      options.services.studio-relay = options { inherit lib pkgs; darwin = true; };
+      options.services.studio-relay = options { inherit lib pkgs config; darwin = true; };
 
       config = lib.mkIf cfg.enable {
-        assertions = assertions cfg ++ [
+        assertions = assertions cfg ++ darwinAssertions cfg ++ [
           { assertion = !cfg.acme; message = "services.studio-relay.acme is NixOS-only; on darwin put a reverse proxy with its own TLS (Caddy, nginx) in front, see docs/sync.md"; }
         ];
 

@@ -136,10 +136,10 @@ def main(argv):
 
     # mirrors nix/relay.nix configFor
     write_toml(relay_dir / "config.toml", {
-        "info": {"relay_url": f"ws://{address}:{relay_port}/", "name": "studio",
+        "info": {"relay_url": f"ws://{lan_host if lan else address}:{relay_port}/", "name": "studio",
                  "description": "The studio's library relay (dev)."},
         "database": {"data_directory": str(relay_dir)},
-        "network": {"address": address, "port": relay_port},
+        "network": {"address": address, "port": relay_port, "ping_interval": 30},
         "options": {"reject_future_seconds": 1800},
         "limits": {"max_event_bytes": max_event, "max_ws_message_bytes": max_event + 4096,
                    "max_ws_frame_bytes": max_event + 4096, "limit_scrapers": False},

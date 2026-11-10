@@ -12,7 +12,12 @@ blossom="${blossom%/}"
 exec </dev/null   # nak reads events from a non-tty stdin; never let it wait on ours
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  case "$*" in *"not allowed"*|*"not authorized"*|*401*|*403*)
+    [ -z "${STUDIO_SMOKE_SEC:-}" ] && echo "  (servers with an allowlist? pass an allowed key as STUDIO_SMOKE_SEC)" >&2 ;; esac
+  exit 1
+}
 ok() { echo "ok   $*"; }
 
 sk="${STUDIO_SMOKE_SEC:-$(nak key generate)}"   # an allowlisted key when the servers have one
@@ -26,7 +31,7 @@ id="$(nak event --sec "$sk" -k 1 -c "$cipher" -t L=smoke "$relay" </dev/null 2>"
   || fail "publish: $(cat "$tmp/pub.err")"
 [ -n "$id" ] && [ "$id" != null ] || fail "publish: no id ($(cat "$tmp/pub.err"))"
 grep -qi "fail\|error\|rejected" "$tmp/pub.err" && fail "publish: $(cat "$tmp/pub.err")"
-back="$(nak req -i "$id" "$relay" 2>/dev/null | jq -r .content)"
+back="$(nak req -i "$id" "$relay" 2>/dev/null | jq -r .content || true)"
 [ "$back" = "$cipher" ] || fail "read back: got '${back:0:40}'"
 [ "$(nak decrypt --sec "$sk" -p "$pk" "$back")" = "$plain" ] || fail "decrypt"
 ok "relay: event ${id:0:12}… published, read back by a second client, NIP-44 decrypts"
@@ -36,7 +41,8 @@ auth() { # auth <verb> [sha256] -> Authorization header value (BUD-11, kind 2424
   [ -n "${2:-}" ] && tags+=(-t "x=$2")
   echo "Nostr $(nak event --sec "$sk" -k 24242 -c "studio $1" "${tags[@]}" </dev/null | base64 | tr -d '\n')"
 }
-code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+# never let a refused connection end the script silently under `set -e`: 000 then reaches a FAIL
+code() { curl -s -o /dev/null -w '%{http_code}' "$@" || true; }
 
 # 2. BUD-06 preflight at the chunk size
 big_sha="$(printf '%064d' 0 | tr 0 a)"
@@ -52,12 +58,12 @@ ok "blossom: HEAD /upload X-Content-Length 67108864 signed=200 unsigned=401"
 head -c 1048576 /dev/urandom > "$tmp/blob"
 sha="$(sha256sum "$tmp/blob" | cut -d' ' -f1)"
 c="$(curl -s -o "$tmp/desc" -w '%{http_code}' -X PUT "$blossom/upload" --data-binary @"$tmp/blob" \
-  -H "Content-Type: application/octet-stream" -H "Authorization: $(auth upload "$sha")")"
+  -H "Content-Type: application/octet-stream" -H "Authorization: $(auth upload "$sha")" || true)"
 [ "$c" = 200 ] || [ "$c" = 201 ] || fail "PUT /upload: $c $(cat "$tmp/desc")"
-[ "$(jq -r .sha256 "$tmp/desc")" = "$sha" ] || fail "descriptor sha256: $(cat "$tmp/desc")"
+[ "$(jq -r .sha256 "$tmp/desc" 2>/dev/null || true)" = "$sha" ] || fail "descriptor sha256: $(cat "$tmp/desc")"
 curl -sf "$blossom/$sha" -o "$tmp/down" || fail "GET /$sha"
 cmp -s "$tmp/blob" "$tmp/down" || fail "download differs"
-c="$(curl -s -o "$tmp/range" -w '%{http_code}' -H "Range: bytes=1000-1999" "$blossom/$sha")"
+c="$(curl -s -o "$tmp/range" -w '%{http_code}' -H "Range: bytes=1000-1999" "$blossom/$sha" || true)"
 if [ "$c" != 206 ] || ! cmp -s "$tmp/range" <(tail -c +1001 "$tmp/blob" | head -c 1000); then fail "range GET: $c"; fi
 ok "blossom: 1 MiB blob ${sha:0:12}… uploaded with a signed auth event, downloaded identical, range 206"
 
@@ -68,5 +74,6 @@ c="$(code -X PUT "$blossom/upload" --data-binary @"$tmp/small" -H "Content-Type:
 ok "blossom: unsigned upload refused (401)"
 
 # tidy: delete the test blob (signed)
-code -X DELETE "$blossom/$sha" -H "Authorization: $(auth delete "$sha")" >/dev/null
+c="$(code -X DELETE "$blossom/$sha" -H "Authorization: $(auth delete "$sha")")"
+case "$c" in 200|204) ;; *) fail "DELETE (tidy): $c" ;; esac
 echo "smoke: all good"

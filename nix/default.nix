@@ -1,6 +1,6 @@
 # The studio's sync infrastructure, as flake outputs (merged into flake.nix's own):
 #
-#   packages.<system>.{blossom-server, dev-infra, infra-smoke}
+#   packages.<system>.{nostr-rs-relay, blossom-server, dev-infra, infra-smoke}
 #   apps.<system>.{dev-infra, infra-smoke}       nix run .#dev-infra / nix run .#infra-smoke
 #   nixosModules.{studio-relay, studio-blossom, studio-infra}    (studio-infra = both)
 #   darwinModules.{studio-relay, studio-blossom, studio-infra}
@@ -15,13 +15,18 @@ let
   forAll = f: lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
 
   blossomVersion = (builtins.fromJSON (builtins.readFile "${blossom-server}/deno.json")).version;
+  # Both servers come from THIS flake's nixpkgs for the host's system, whatever nixpkgs the
+  # importing host (nix-config) runs: the relay is the version S4 measured, and the Blossom
+  # server's fixed-output deno hashes only hold for this deno.
+  pinned = pkgs: nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system};
+  relayFor = pkgs: (pinned pkgs).nostr-rs-relay;
   blossomServerFor = pkgs: import ./blossom-server.nix {
-    pkgs = pkgs.extend blossom-server.inputs.deno2nix.overlays.default;
+    pkgs = (pinned pkgs).extend blossom-server.inputs.deno2nix.overlays.default;
     src = blossom-server.outPath;
     version = blossomVersion;
   };
 
-  relay = import ./relay.nix;
+  relay = import ./relay.nix { inherit relayFor; };
   blossom = import ./blossom.nix { inherit blossomServerFor; };
 
   # nak's FUSE subpackage doesn't build on darwin (macfuse stubs); the CLI is all we use
@@ -30,7 +35,7 @@ let
   devInfraFor = pkgs: pkgs.writeShellApplication {
     name = "dev-infra";
     text = ''
-      export STUDIO_INFRA_RELAY_BIN=${lib.getExe' pkgs.nostr-rs-relay "nostr-rs-relay"}
+      export STUDIO_INFRA_RELAY_BIN=${lib.getExe' (relayFor pkgs) "nostr-rs-relay"}
       export STUDIO_INFRA_BLOSSOM_BIN=${lib.getExe (blossomServerFor pkgs)}
       export STUDIO_INFRA_PROCESS_COMPOSE=${lib.getExe pkgs.process-compose}
       export STUDIO_INFRA_PC_CONFIG=${./process-compose.yaml}
@@ -85,7 +90,8 @@ let
         system.stateVersion = 6;
         system.primaryUser = "claude";
         nix.enable = false;
-        services.studio-relay = { user = "claude"; dataDir = "/Users/claude/.local/state/studio/relay"; };
+        # relay: `user` left to its default (system.primaryUser)
+        services.studio-relay.dataDir = "/Users/claude/.local/state/studio/relay";
         services.studio-blossom = { user = "claude"; dataDir = "/Users/claude/.local/state/studio/blossom"; };
       }
     ];
@@ -95,6 +101,7 @@ in
 {
   packages = forAll (pkgs: {
     blossom-server = blossomServerFor pkgs;
+    nostr-rs-relay = relayFor pkgs;
     dev-infra = devInfraFor pkgs;
     infra-smoke = smokeFor pkgs;
   });

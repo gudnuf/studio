@@ -19,8 +19,13 @@ and tests override them with `STUDIO_RELAY` / `STUDIO_BLOSSOM`.
 
 | | Server | Package | Default port |
 |---|---|---|---|
-| relay | nostr-rs-relay 0.10.0 | `pkgs.nostr-rs-relay` (nixpkgs) | 7347 |
-| Blossom | hzrd149/blossom-server (Deno) | `packages.blossom-server` (`nix/blossom-server.nix`, the `blossom-server` flake input) | 7348 |
+| relay | nostr-rs-relay 0.10.0 | `packages.nostr-rs-relay` (this flake's nixpkgs) | 7347 |
+| Blossom | hzrd149/blossom-server 6.4.2 (Deno) | `packages.blossom-server` (`nix/blossom-server.nix`, the `blossom-server` flake input) | 7348 |
+
+Both are **pinned by this flake**: the modules' default `package` is built from the studio flake's own
+nixpkgs for the host's system, not from the importing host's nixpkgs, so a deploy runs exactly the
+versions S4 measured (a host on an older nixpkgs would otherwise get nostr-rs-relay 0.9.0, and the
+Blossom server's deno dependency hashes only hold for this deno). `package` stays overridable.
 
 The Blossom server is hzrd149's, not the crates.io `blossom-server` the plan named first: spike S4
 found that one lacks `HEAD /upload` (BUD-06) and range GETs, buffers whole blobs in memory, and
@@ -68,12 +73,17 @@ nix run .#infra-smoke                # check a running pair: event round trip, s
 | Flake output | Platform | Runs as |
 |---|---|---|
 | `nixosModules.studio-relay`, `.studio-blossom`, `.studio-infra` (both) | NixOS | hardened systemd services, nginx + ACME when `domain` is set |
-| `darwinModules.studio-relay`, `.studio-blossom`, `.studio-infra` (both) | nix-darwin | launchd daemons as `user` |
+| `darwinModules.studio-relay`, `.studio-blossom`, `.studio-infra` (both) | nix-darwin | launchd daemons as `user` (default `system.primaryUser`; root is refused) |
 
 Relay options: `enable, package, address, port, dataDir, maxEventBytes, pubkeyWhitelist, domain,
 acme, extraSettings` (+ `user` on darwin). Blossom options: `enable, package, address, port, dataDir,
 maxUpload, allowedPubkeys, storage = { local = { }; } | { s3 = { endpoint, bucket, region,
 publicUrl }; }, environmentFile, domain, acme, extraSettings` (+ `user` on darwin).
+
+On NixOS, `domain` requires `acme = true` (the relay advertises `wss://` and Blossom's blob URLs are
+`https://`; plain http behind them would be a trap). nginx keeps relay websockets open for an hour
+(the relay pings every 30 s) and waits up to 600 s for Blossom to answer a finished upload (S3 commits
+on a slow uplink).
 
 `nix flake check` evaluates both pairs on a dummy NixOS host (domain + ACME + S3) and a dummy darwin
 host. They were also evaluated into the real `nous` darwin configuration from nix-config (via
@@ -128,8 +138,9 @@ inputs.studio.nixosModules.studio-infra
 # nous (nix-darwin), always-on at home instead of `nix run .#dev-infra`
 inputs.studio.darwinModules.studio-infra
 {
-  services.studio-relay = { enable = true; user = "claude"; dataDir = "/Users/claude/.local/state/studio/relay"; };
-  services.studio-blossom = { enable = true; user = "claude"; dataDir = "/Users/claude/.local/state/studio/blossom"; };
+  # user defaults to system.primaryUser (claude on nous)
+  services.studio-relay = { enable = true; dataDir = "/Users/claude/.local/state/studio/relay"; };
+  services.studio-blossom = { enable = true; dataDir = "/Users/claude/.local/state/studio/blossom"; };
 }
 ```
 

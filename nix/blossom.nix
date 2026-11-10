@@ -21,13 +21,17 @@
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 { blossomServerFor }:
 let
-  options = { lib, pkgs, darwin }: {
+  options = { lib, pkgs, config, darwin }: {
     enable = lib.mkEnableOption "the studio's Blossom blob server (hzrd149/blossom-server)";
     package = lib.mkOption {
       type = lib.types.package;
       default = blossomServerFor pkgs;
       defaultText = lib.literalExpression "studio.packages.\${system}.blossom-server";
-      description = "The Blossom server. Takes hzrd149/blossom-server's config.yml as its first argument.";
+      description = ''
+        The Blossom server; takes hzrd149/blossom-server's config.yml as its first argument. Defaults
+        to the studio flake's pin, built with the studio flake's own nixpkgs (its deno dependency
+        hashes are only valid there), whatever the host's nixpkgs has.
+      '';
     };
     address = lib.mkOption {
       type = lib.types.str;
@@ -100,8 +104,9 @@ let
       default = null;
       example = "blossom.example.org";
       description = ''
-        Public name. Sets the blob URLs and the BUD-11 `server` tag check and, on NixOS, an nginx
-        virtual host proxying to the server. # CHIRA SEAM
+        Public name. Sets the blob URLs (https://) and the BUD-11 `server` tag check and, on NixOS,
+        an nginx virtual host proxying to the server; NixOS requires `acme` with it. On darwin a
+        reverse proxy with TLS must front it. # CHIRA SEAM
       '';
     };
     acme = lib.mkOption {
@@ -119,10 +124,11 @@ let
     };
   } // lib.optionalAttrs darwin {
     user = lib.mkOption {
-      type = lib.types.str;
-      default = "root";
+      type = lib.types.nullOr lib.types.str;
+      default = config.system.primaryUser or null;
+      defaultText = lib.literalExpression "config.system.primaryUser";
       example = "claude";
-      description = "Darwin: the user the launchd daemon runs as and who owns `dataDir`.";
+      description = "Darwin: the user the launchd daemon runs as and who owns `dataDir`. Never root.";
     };
   };
 
@@ -178,10 +184,12 @@ in
   nixos = { config, lib, pkgs, ... }:
     let cfg = config.services.studio-blossom;
     in {
-      options.services.studio-blossom = options { inherit lib pkgs; darwin = false; };
+      options.services.studio-blossom = options { inherit lib pkgs config; darwin = false; };
 
       config = lib.mkIf cfg.enable {
-        assertions = assertions cfg;
+        assertions = assertions cfg ++ [
+          { assertion = cfg.domain != null -> cfg.acme; message = "services.studio-blossom.domain needs acme = true on NixOS (blob URLs are https://)"; }
+        ];
 
         users.users.studio-blossom = { isSystemUser = true; group = "studio-blossom"; home = cfg.dataDir; };
         users.groups.studio-blossom = { };
@@ -215,6 +223,17 @@ in
             ProtectKernelTunables = true;
             ProtectSystem = "strict";
             RestrictSUIDSGID = true;
+            # as the relay's, minus MemoryDenyWriteExecute (deno JITs)
+            CapabilityBoundingSet = "";
+            LockPersonality = true;
+            SystemCallFilter = [ "@system-service" ];
+            SystemCallArchitectures = "native";
+            RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+            RestrictNamespaces = true;
+            RestrictRealtime = true;
+            ProtectClock = true;
+            ProtectHostname = true;
+            ProtectProc = "invisible";
           } // lib.optionalAttrs (cfg.environmentFile != null) { EnvironmentFile = cfg.environmentFile; };
         };
 
@@ -230,6 +249,9 @@ in
                 client_max_body_size ${toString cfg.maxUpload};
                 proxy_request_buffering off;
                 proxy_buffering off;
+                # a 128 MiB body to S3 on a slow uplink: wait for the descriptor
+                proxy_read_timeout 600s;
+                proxy_send_timeout 600s;
               '';
             };
           };
@@ -242,16 +264,18 @@ in
     let
       cfg = config.services.studio-blossom;
       start = pkgs.writeShellScript "studio-blossom-start" ''
+        set -eu
         ${lib.optionalString (cfg.environmentFile != null) ''
           set -a; . ${lib.escapeShellArg cfg.environmentFile}; set +a
         ''}
         exec ${lib.getExe cfg.package} ${configFile { inherit lib pkgs cfg; }}
       '';
     in {
-      options.services.studio-blossom = options { inherit lib pkgs; darwin = true; };
+      options.services.studio-blossom = options { inherit lib pkgs config; darwin = true; };
 
       config = lib.mkIf cfg.enable {
         assertions = assertions cfg ++ [
+          { assertion = cfg.user != null && cfg.user != "root"; message = "services.studio-blossom.user: set a non-root user (no system.primaryUser to default to)"; }
           { assertion = !cfg.acme; message = "services.studio-blossom.acme is NixOS-only; on darwin put a reverse proxy with its own TLS (Caddy, nginx) in front, see docs/sync.md"; }
         ];
 
