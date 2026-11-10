@@ -26,7 +26,8 @@
                                            bytes passes (or every failure has an exception)
   studio exception grant P RULE [CLIP] --why TEXT | revoke P ID | ls P
                                            bend a hard rule on purpose, in words; listed by check
-  studio timeline onscreen|card P CLIP ... declare on-screen text (a hook) / a designed card
+                                           (--onscreen TEXT / --card: declare a hook in the picture
+                                           or a designed card; bound to the clip as it is now)
   studio choose P CHOSEN|none --from A,B,C | choose P LABEL --round R
                                            log a pick: what was shown, what was chosen
   studio ab PROJECT [EXPORT...]            a blind A/B of versions (shuffled, mapping logged)
@@ -350,12 +351,38 @@ EXCEPTABLE = {
 def rule_id(name):
     return re.sub(r"[-_\s]+", " ", str(name or "")).strip().lower()
 
-def covering(f, exceptions):
-    """The granted (not revoked) exception that covers failure f {rule, clip}, or None. One
-    without a clip covers the rule across the whole reel."""
-    return next((x for x in (exceptions or {}).values()
-                 if not x.get("revoked") and f.get("rule") in EXCEPTABLE and x.get("rule") == f["rule"]
-                 and (not x.get("clip") or x["clip"] == f.get("clip"))), None)
+# What an exception was granted on: the clip as it was (its media, in/out and every effect; not
+# its label), or the whole story for one without a clip. If that changes, the exception lapses
+# and must be granted again: it never waives a failure nobody looked at.
+_FP_SKIP = ("id", "label", "moment")
+
+def clip_fp(c):
+    return hashlib.sha256(json.dumps({k: v for k, v in c.items() if k not in _FP_SKIP},
+                                     sort_keys=True).encode()).hexdigest()[:16]
+
+def reel_fp(tl):
+    return hashlib.sha256(json.dumps([tl.get("aspect"), bool(tl.get("captions", True)), tl.get("voice"),
+                                      [clip_fp(c) for c in tl.get("clips", [])]]).encode()).hexdigest()[:16]
+
+def exception_scope(x):
+    """'on-screen text', 'designed card' or None: what an exception declares about the picture."""
+    return {"onscreen": "on-screen text", "card": "designed card"}.get(x.get("kind"))
+
+def covering(f, exceptions, lapsed=None):
+    """The granted (not revoked) exception that covers failure f {rule, clip, fp, reel}, or None.
+    One with a clip covers that clip as it was when granted; one without covers the rule across
+    the whole reel as it was. Exceptions that match but were granted on a different state are
+    added to `lapsed` (a list) if given."""
+    for x in (exceptions or {}).values():
+        if x.get("revoked") or f.get("rule") not in EXCEPTABLE or x.get("rule") != f["rule"]:
+            continue
+        if x.get("clip") and x["clip"] != f.get("clip"):
+            continue
+        if x.get("fp") == (f.get("fp") if x.get("clip") else f.get("reel")):
+            return x
+        if lapsed is not None:
+            lapsed.append(x)
+    return None
 
 def export_verdict(pj, ex, sha=None):
     """Is this export ready? {state: ready|failed|unchecked, ...}. sha: the bytes on disk now
@@ -370,13 +397,19 @@ def export_verdict(pj, ex, sha=None):
     for f in chk.get("failures") or []:
         x = covering(f, pj.get("exceptions"))
         if x:
-            excepted.append({**f, "exception": x["id"], "by": x.get("actor"), "why": x.get("why")})
+            excepted.append({**f, "exception": x["id"], "by": x.get("actor"), "why": x.get("why"),
+                             **({"declares": exception_scope(x)} if exception_scope(x) else {}),
+                             **({"text": x["text"]} if x.get("text") else {})})
         else:
             open_.append(f)
     return {"state": "failed" if open_ else "ready", "checked": chk["ts"], "by": chk.get("actor"),
             "failed": sorted({f["rule"] for f in open_}), "open": open_, "excepted": excepted}
 
-def grant_exception(slug, rule, clip=None, why="", actor="cli"):
+def grant_exception(slug, rule, clip=None, why="", actor="cli", onscreen=None, card=False):
+    """onscreen TEXT: the clip shows this text (a drawn or overlaid hook), so the first-word rule
+    is met by the picture; card: the clip is a designed card, so a still or dark picture is meant.
+    Both are declarations nothing measures, so they are exceptions like any other: who, why,
+    revocable, listed by check."""
     st = state()
     pj = st["projects"].get(slug)
     if not pj:
@@ -387,11 +420,34 @@ def grant_exception(slug, rule, clip=None, why="", actor="cli"):
                            "; ".join(f"{k} ({v})" for k, v in EXCEPTABLE.items()))
     if len(why.strip()) < 8:
         raise RuntimeError("say why in words (--why): what the picture or the line does that the rule misses")
-    c = next((c for c in pj["timeline"]["clips"] if c["id"] == clip), None) if clip else None
+    kind = "onscreen" if onscreen is not None else "card" if card else None
+    if kind and not clip:
+        raise RuntimeError(f"--{kind} declares something about one clip: name the CLIP")
+    if kind == "onscreen" and (rule != "first word" or not onscreen.strip()):
+        raise RuntimeError('--onscreen TEXT goes with the "first word" rule: the text that is the hook')
+    if kind == "card" and rule != "picture":
+        raise RuntimeError("--card goes with the picture rule: a still or dark card that is meant")
+    tl = normalize_timeline(pj["timeline"], st["media"])
+    c = next((c for c in tl["clips"] if c["id"] == clip), None) if clip else None
+    if clip and not c:
+        raise RuntimeError(f"no clip {clip} in {slug}")
     ev = emit("exception.granted", None, id=clip_id(), project=slug, brand=pj.get("brand", "jefe"),
-              rule=rule, clip=clip, **({"label": c["label"]} if c and c.get("label") else {}),
+              rule=rule, clip=clip, fp=clip_fp(c) if c else reel_fp(tl),
+              **({"label": c["label"]} if c and c.get("label") else {}),
+              **({"kind": kind} if kind else {}), **({"text": onscreen.strip()} if kind == "onscreen" else {}),
               why=why.strip(), actor=actor)
     return ev["data"]
+
+def exception_state(x, tl):
+    """granted | lapsed (what it was granted on changed) | revoked | invalid (a rule that can't
+    bend: a hand-written event, ignored)."""
+    if x.get("rule") not in EXCEPTABLE:
+        return "invalid"
+    if x.get("revoked"):
+        return "revoked"
+    c = next((c for c in tl["clips"] if c["id"] == x["clip"]), None) if x.get("clip") else None
+    now = (clip_fp(c) if c else None) if x.get("clip") else reel_fp(tl)
+    return "granted" if now and now == x.get("fp") else "lapsed"
 
 def revoke_exception(slug, xid, why="", actor="cli"):
     st = state()
@@ -455,12 +511,15 @@ def record_choice(slug, shown, chosen, kind=None, action="pick", blind=False, la
         raise RuntimeError(f"no project {slug}")
     if action not in ACTIONS:
         raise RuntimeError(f"action is one of {', '.join(ACTIONS)}")
+    if not shown:
+        raise RuntimeError("a choice needs the options that were shown")
     ids, prov, kinds = [], {}, set()
     for o in shown:
         k, p = option_provenance(st, slug, o)
         oid = p.get("id", str(o))
         ids.append(oid)
-        prov[oid] = {**p, **((options or {}).get(str(o)) or {})}
+        caller = (options or {}).get(str(o))    # what the caller saw (e.g. a draft's text);
+        prov[oid] = {**(caller if isinstance(caller, dict) else {}), **p}   # the studio's facts win
         prov[oid].pop("id", None)
         kinds.add(k)
     if len(set(ids)) != len(ids):
@@ -509,9 +568,13 @@ def blind_round(slug, exports=None, actor="cli", rng=None):
     rid = clip_id()
     d = pdir(slug) / "blind" / rid
     d.mkdir(parents=True)
-    labels = {}
+    labels, now = {}, time.time()
     for lab, e in zip(BLIND_LABELS, picked):
-        clone_or_copy(HOME / e["file"], d / f"{lab}{Path(e['file']).suffix}")
+        # a real copy (a clone keeps the export's dates, which say which is newer), then every
+        # copy gets the same dates; they're made in label order, so creation order says nothing
+        out = d / f"{lab}{Path(e['file']).suffix}"
+        shutil.copyfile(HOME / e["file"], out)
+        os.utime(out, (now, now))
         labels[lab] = e["sha256"]
     emit("blind.round", None, round=rid, project=slug, brand=pj.get("brand", "jefe"), kind="version",
          labels=labels, dir=str(d.relative_to(HOME)), actor=actor)
@@ -959,10 +1022,6 @@ def normalize_timeline(tl, lib, problems=None):
             pass
         if c.get("fit") in FITS:       # absent = the default for that footage (fit_default)
             extra["fit"] = c["fit"]
-        if isinstance(c.get("onscreen"), str) and c["onscreen"].strip():
-            extra["onscreen"] = c["onscreen"].strip()   # drawn/overlay text in the picture (a hook)
-        if c.get("card") is True:      # a designed card (title, text on a plain ground): not "black"
-            extra["card"] = True
         if c.get("voice") in VOICES:   # absent = the story's setting (else natural if spoken)
             extra["voice"] = c["voice"]
         try:                           # absent = 1 (as said)
@@ -2758,6 +2817,7 @@ def check(slug, path=None, actor="cli"):
     out_dir = final.with_name(final.stem + ".check")
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True)
+    sha0 = receipt(final)          # bound to these bytes; hashed again at the end
     dur = probe(final)["duration"]
     rules = []
     def rule(name, ok, detail, items=None):
@@ -2837,21 +2897,13 @@ def check(slug, path=None, actor="cli"):
     heard_regions = vad_regions(wav)
     inside = lambda r: any(a - 0.05 <= r[0] and r[1] <= b + 0.05 for a, b in picture_only)
     talk = [r for r in heard_regions if not inside(r)]
-    text_clip = next((c for c in clips if c.get("onscreen")), None)
     fw = talk[0][0] if talk else None
     first = clips[0]["id"] if clips else None
-    if text_clip and (fw is None or text_clip["at"] < fw):
-        tt = text_clip["at"]
-        rule("first word", tt <= CHECK_FIRST_WORD,
-             f"on-screen text at {tt:.2f}s: {text_clip['onscreen'][:60]!r} (declared on clip "
-             f"{clips.index(text_clip) + 1}; want <= {CHECK_FIRST_WORD}s)", [] if tt <= CHECK_FIRST_WORD else
-             [(f"the hook (on-screen text) starts at {tt:.2f}s", first)])
-    elif fw is not None:
+    if fw is not None:
         rule("first word", fw <= CHECK_FIRST_WORD, f"first word at {fw:.2f}s (want <= {CHECK_FIRST_WORD}s)",
              [] if fw <= CHECK_FIRST_WORD else [(f"first word at {fw:.2f}s", first)])
     else:
-        rule("first word", "skip", "no speech and no declared on-screen text "
-             "(studio timeline onscreen P CLIP TEXT declares drawn or overlay text)")
+        rule("first word", "skip", "no speech in the export (on-screen text can't be measured: judge it)")
     if talk:
         long_, gaps = [], []
         for (a0, a1), (b0, b1) in zip(talk, talk[1:]):
@@ -2885,12 +2937,9 @@ def check(slug, path=None, actor="cli"):
 
     # 6. black / frozen picture
     black, frozen = detect_black_freeze(final)
-    card = lambda a, b: (c := clip_at((a + b) / 2)) is not None and c.get("card")   # designed, not black
-    bad = [(f"black {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in black if not card(a, b)] + \
-          [(f"frozen {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in frozen if not card(a, b)]
-    ncard = sum(bool(c.get("card")) for c in clips)
-    rule("picture", not bad, ("no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}")
-         + (f"; {ncard} designed card{'s' if ncard != 1 else ''} (a held or dark card is meant)" if ncard else ""), bad)
+    bad = [(f"black {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in black] + \
+          [(f"frozen {a:.2f}-{b:.2f}s", cid((a + b) / 2)) for a, b in frozen]
+    rule("picture", not bad, "no black or frozen frames" if not bad else f"{len(bad)} stretch{'es' if len(bad) != 1 else ''}", bad)
 
     # 7-8. captions against what the export actually says; the last word
     brand = (st["projects"].get(slug) or {}).get("brand") or "jefe"
@@ -2948,8 +2997,10 @@ def check(slug, path=None, actor="cli"):
         print(f"    contact sheet failed: {str(e).splitlines()[-1][:160]}", file=sys.stderr)
 
     # every hard failure, by rule and clip; then the exceptions granted for this project
-    failures = [{"rule": r["rule"], "clip": c, "item": i} for r in rules if r["status"] == "fail"
-                for i, c in (r["_items"] or [(r["detail"], None)])]
+    fps = {c["id"]: clip_fp(c) for c in (tl or {}).get("clips", [])}   # the clips as rendered
+    reel = reel_fp(tl) if tl else None
+    failures = [{"rule": r["rule"], "clip": c, "item": i, "fp": fps.get(c), "reel": reel}
+                for r in rules if r["status"] == "fail" for i, c in (r["_items"] or [(r["detail"], None)])]
     exceptions = (state()["projects"].get(slug) or {}).get("exceptions") or {}
     for r in rules:
         items = r.pop("_items")
@@ -2959,11 +3010,16 @@ def check(slug, path=None, actor="cli"):
             continue
         open_, exc = [], []
         for i, c in (items or [(r["detail"], None)]):
-            x = covering({"rule": r["rule"], "clip": c}, exceptions)
+            lapsed = []
+            x = covering({"rule": r["rule"], "clip": c, "fp": fps.get(c), "reel": reel}, exceptions, lapsed)
             if x:
-                exc.append({"item": i, "exception": x["id"], "by": x.get("actor"), "why": x.get("why")})
+                exc.append({"item": i, "exception": x["id"], "by": x.get("actor"), "why": x.get("why"),
+                            **({"declares": exception_scope(x)} if exception_scope(x) else {}),
+                            **({"text": x["text"]} if x.get("text") else {})})
             else:
-                open_.append(i)
+                open_.append(i + "".join(f" (exception {l['id']} lapsed: the "
+                                         f"{'clip' if l.get('clip') else 'story'} changed since it was granted)"
+                                         for l in lapsed))
         if items and open_:
             r["items"] = open_
         if exc:
@@ -2973,6 +3029,8 @@ def check(slug, path=None, actor="cli"):
     failed = [r["rule"] for r in rules if r["status"] == "fail"]
     excepted = [{"rule": r["rule"], **x} for r in rules for x in r.get("excepted", [])]
     sha = receipt(final)
+    if sha != sha0:     # replaced while it was being measured: these numbers belong to no bytes
+        raise RuntimeError(f"{final.name} changed while it was being checked; no check record written. Check it again.")
     rel = lambda p: str(p.relative_to(HOME)) if p.resolve().is_relative_to(HOME.resolve()) else str(p)
     res = {"project": slug, "file": rel(final), "sha256": sha, "ok": not failed, "failed": failed,
            "excepted": excepted, "duration": round(dur, 2), "rules": rules, "sheet": rel(out_dir),
@@ -2995,8 +3053,9 @@ def verdict_text(r):
     for x in r["rules"]:
         out.append(f"  {CHECK_MARK[x['status']]:<4}  {x['rule']:<10}  {x['detail']}")
         out += [f"              - {i}" for i in x.get("items", [])]
-        out += [f"              ~ EXCEPTION {e['exception']} by {e.get('by') or '?'}: {e['item']}. "
-                f"Why: {e.get('why')}" for e in x.get("excepted", [])]
+        out += [f"              ~ EXCEPTION {e['exception']} by {e.get('by') or '?'}: {e['item']}"
+                + (f" [declared {e['declares']}" + (f": {e['text']!r}" if e.get("text") else "") + "]"
+                   if e.get("declares") else "") + f". Why: {e.get('why')}" for e in x.get("excepted", [])]
     return "\n".join(out) + "\n"
 
 def _font():
@@ -3804,9 +3863,7 @@ def cmd_timeline(a):
                 (f"  (moment {c['moment']})" if c.get("moment") else "")
             voice = clip_voice(c, tl, bool(it.get("has_audio")) and clip_spoken(c))
             tags += (f"  [voice {voice}]" if voice != "off" else "") + \
-                (f"  [pace {clip_pace(c):g}]" if clip_pace(c) != 1.0 else "") + \
-                ("  [card]" if c.get("card") else "") + \
-                (f"  [on screen: {c['onscreen'][:40]!r}]" if c.get("onscreen") else "")
+                (f"  [pace {clip_pace(c):g}]" if clip_pace(c) != 1.0 else "")
             print(f"  {i + 1:>2} {c['id']}  {c['media']}  {fmt_t(c['in'])}–{fmt_t(c['out'])}"
                   f"  ({clip_len(c):.1f}s)  {it.get('name', '?')}  {c.get('label', '')}{tags}")
             for n, p in enumerate(visible_cover(c), 1):
@@ -3936,7 +3993,7 @@ def cmd_timeline(a):
                       f" down to {to:g}s ({cut:.2f}s out)", file=sys.stderr)
             out += pieces
         tl = {**tl, "clips": out}
-    elif a.action in ("trim", "move", "split", "rm", "label", "fit", "cover", "uncover", "onscreen", "card"):
+    elif a.action in ("trim", "move", "split", "rm", "label", "fit", "cover", "uncover"):
         clips = [dict(c) for c in tl["clips"]]
         if not a.args:
             sys.exit(f"timeline {a.action}: which clip? (index or id; see `timeline show`)")
@@ -3989,19 +4046,6 @@ def cmd_timeline(a):
                     c.pop("label", None)
             elif a.action == "rm":
                 clips.pop(i)
-            elif a.action == "onscreen":   # onscreen P CLIP TEXT...: text drawn in its picture
-                text = " ".join(a.args[1:]).strip()
-                if text:
-                    c["onscreen"] = text
-                else:
-                    c.pop("onscreen", None)
-            elif a.action == "card":    # card P CLIP on|off: a designed card, not black picture
-                if a.args[1] not in ("on", "off"):
-                    sys.exit("timeline card PROJECT CLIP on|off")
-                if a.args[1] == "on":
-                    c["card"] = True
-                else:
-                    c.pop("card", None)
             elif a.action == "cover":   # cover P CLIP --with MEDIA IN OUT [--at T] [--fit F]
                 if not a.cover_with:
                     sys.exit("timeline cover PROJECT CLIP --with MEDIA IN OUT [--at T] [--fit fill|fit]")
@@ -4301,10 +4345,13 @@ def cmd_exception(a):
                          + ", ".join(EXCEPTABLE) + ")")
             clip = pj["timeline"]["clips"][clip_index(pj["timeline"]["clips"], a.args[1])]["id"] \
                 if len(a.args) > 1 else None
-            x = grant_exception(a.project, a.args[0], clip, a.why or "", actor=actor_now())
-            print(f"granted {x['id']}: {x['rule']} on " + (f"clip {clip}" if clip else "the whole reel")
-                  + f". Why: {x['why']}\n(the next check passes it and lists it; the operator may "
-                  f"revoke it: studio exception revoke {a.project} {x['id']})")
+            x = grant_exception(a.project, a.args[0], clip, a.why or "", actor=actor_now(),
+                                onscreen=a.onscreen, card=a.card)
+            print(f"granted {x['id']}: {x['rule']} on " + (f"clip {clip} as it is now" if clip else
+                  "the whole reel as it is now") + (f" (declares {exception_scope(x)})" if x.get("kind") else "")
+                  + f". Why: {x['why']}\n(the next check passes it and lists it; if the "
+                  f"{'clip' if clip else 'story'} changes it lapses; the operator may revoke it: "
+                  f"studio exception revoke {a.project} {x['id']})")
             return
         if a.action == "revoke":      # revoke P ID [--why TEXT]
             if not a.args:
@@ -4314,7 +4361,8 @@ def cmd_exception(a):
             return
     except RuntimeError as e:
         sys.exit(f"studio exception: {e}")
-    exs = list((pj.get("exceptions") or {}).values())   # ls
+    tl = normalize_timeline(pj["timeline"], st["media"])
+    exs = [{**x, "state": exception_state(x, tl)} for x in (pj.get("exceptions") or {}).values()]   # ls
     if a.json:
         print(json.dumps(exs, indent=1))
         return
@@ -4322,12 +4370,16 @@ def cmd_exception(a):
         print(f"no exceptions in {a.project}. Rules that may bend: "
               + "; ".join(f"{k} ({v})" for k, v in EXCEPTABLE.items()))
     for x in exs:
-        if x.get("revoked") and not a.all:
+        if x["state"] in ("revoked", "invalid") and not a.all:
             continue
-        state_ = (f"REVOKED {x['revoked']['ts']} by {x['revoked'].get('actor') or '?'}"
-                  + (f": {x['revoked']['why']}" if x["revoked"].get("why") else "")) if x.get("revoked") else "granted"
+        state_ = {"granted": "granted",
+                  "lapsed": f"LAPSED: the {'clip' if x.get('clip') else 'story'} changed since; grant again if it still holds",
+                  "invalid": "INVALID: this rule can't bend; ignored",
+                  "revoked": (f"REVOKED {x['revoked']['ts']} by {x['revoked'].get('actor') or '?'}"
+                              + (f": {x['revoked']['why']}" if x["revoked"].get("why") else "")) if x.get("revoked") else ""}[x["state"]]
+        decl = f"  declares {exception_scope(x)}" + (f" {x['text']!r}" if x.get("text") else "") if x.get("kind") else ""
         print(f"{x['id']}  {x['rule']:<10}  {('clip ' + x['clip']) if x.get('clip') else 'whole reel':<14}  "
-              f"{x.get('actor') or '?'} {x['ts']}  {state_}\n          why: {x.get('why')}")
+              f"{x.get('actor') or '?'} {x['ts']}  {state_}{decl}\n          why: {x.get('why')}")
 
 def cmd_ready(a):
     """Exit 0 only when the export (default: the latest) is checked, bytes and all."""
@@ -4387,6 +4439,8 @@ def cmd_ab(a):
     print(f"blind round {rid}: {len(labels)} versions, labels hidden, order shuffled")
     for lab in sorted(labels):
         print(f"  {lab}  {next(d.glob(lab + '.*'))}")
+    print("  (same dates on every copy; the sizes are the real files', so don't look them up in "
+          "the exports list)")
     print(f"watch them, then: studio choose {a.project} A|B|none --round {rid} [--note TEXT]")
 
 def cmd_bundle(a):
@@ -4458,7 +4512,7 @@ def main():
     p = sub.add_parser("timeline")
     p.add_argument("action", choices=["show", "add", "clear", "set", "trim", "move", "split", "rm",
                                       "label", "fit", "snap", "cover", "uncover", "voice", "pace",
-                                      "tighten", "onscreen", "card"])
+                                      "tighten"])
     p.add_argument("project"); p.add_argument("args", nargs="*")
     p.add_argument("--at", type=float, metavar="N|T",
                    help="add: insert as clip N (1-based); cover: seconds into the clip (default 0)")
@@ -4487,7 +4541,9 @@ def main():
     p.add_argument("action", choices=["grant", "revoke", "ls"]); p.add_argument("project")
     p.add_argument("args", nargs="*", metavar="RULE [CLIP] | ID")
     p.add_argument("--why", help="grant: what the picture or the line does that the rule misses; revoke: why not")
-    p.add_argument("--all", action="store_true", help="ls: revoked ones too")
+    p.add_argument("--all", action="store_true", help="ls: revoked and invalid ones too")
+    p.add_argument("--onscreen", metavar="TEXT", help='grant "first word" CLIP: the clip shows this text (the hook)')
+    p.add_argument("--card", action="store_true", help="grant picture CLIP: the clip is a designed card")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("choose", help="log a pick (preference data): what was shown, what was chosen")
     p.add_argument("project"); p.add_argument("chosen", metavar="CHOSEN|none|LABEL")

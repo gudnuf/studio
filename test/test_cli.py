@@ -1366,28 +1366,39 @@ class Quality(unittest.TestCase):
         self.assertIn("can't be excepted", bad.stderr)
         self.assertNotEqual(H.cli(self.home, "exception", "grant", slug, "pauses", c2, check=False).returncode, 0,
                             "an exception needs a reason in words")
-        # the agent grants its own, with reasons; the picture is declared, not guessed
+        self.assertNotEqual(H.cli(self.home, "exception", "grant", slug, "picture", c2, "--onscreen", "x",
+                                  "--why", "mismatched declaration", check=False).returncode, 0,
+                            "--onscreen goes with first word, --card with picture")
+        # the agent grants its own, with reasons. What the picture holds (on-screen text, a
+        # designed card) is declared the same way: nothing measures it, so it's an exception
         why = "the beat after 'hours' is a reveal; the picture carries the held silence"
         H.cli(self.home, "exception", "grant", slug, "pauses", c2, "--why", why, as_agent=True)
         H.cli(self.home, "exception", "grant", slug, "length", "--why", "a test reel: short on purpose", as_agent=True)
-        H.cli(self.home, "timeline", "onscreen", slug, c1, "3 hours of sprinklers")
-        H.cli(self.home, "timeline", "card", slug, c2, "on")
+        H.cli(self.home, "exception", "grant", slug, "first word", c1, "--onscreen", "3 hours of sprinklers",
+              "--why", "the cold open shows the hook as text over the sprinklers", as_agent=True)
+        H.cli(self.home, "exception", "grant", slug, "picture", c2, "--card",
+              "--why", "the dark beat is the designed title card", as_agent=True)
         g = [e["data"] for e in H.events(self.home) if e["type"] == "exception.granted"]
-        self.assertEqual([(x["rule"], x["clip"], x["actor"], x["brand"]) for x in g],
-                         [("pauses", c2, "agent", "jefe"), ("length", None, "agent", "jefe")])
+        self.assertEqual([(x["rule"], x["clip"], x["actor"], x["brand"], x.get("kind")) for x in g],
+                         [("pauses", c2, "agent", "jefe", None), ("length", None, "agent", "jefe", None),
+                          ("first word", c1, "agent", "jefe", "onscreen"), ("picture", c2, "agent", "jefe", "card")])
+        self.assertTrue(all(x["fp"] for x in g), "bound to what they were granted on")
+        self.assertEqual(g[2]["text"], "3 hours of sprinklers")
         H.cli(self.home, "render", slug, timeout=900)
         self.assertEqual(H.cli(self.home, "ready", slug, check=False).returncode, 1, "a re-render starts unchecked")
         r2 = H.cli(self.home, "check", slug, timeout=900)          # exit 0: every failure excepted
         self.assertIn("EXCEPTION", r2.stdout)
         self.assertIn(why, r2.stdout)
+        self.assertIn("declared on-screen text: '3 hours of sprinklers'", r2.stdout)
+        self.assertIn("declared designed card", r2.stdout)
         res, r = self.check(slug)
         self.assertTrue(res["ok"], res["failed"])
-        self.assertEqual(r["first word"]["status"], "pass", r["first word"])
-        self.assertIn("on-screen text at 0.00s", r["first word"]["detail"])
-        self.assertEqual(r["picture"]["status"], "pass", "a designed card is not black")
+        self.assertEqual(r["first word"]["status"], "excepted", r["first word"])
+        self.assertEqual(r["first word"]["excepted"][0]["declares"], "on-screen text")
+        self.assertEqual(r["picture"]["status"], "excepted", "a declared card is listed, not silently passed")
         self.assertEqual(r["pauses"]["status"], "excepted")
         self.assertEqual(r["pauses"]["excepted"][0]["why"], why)
-        self.assertEqual({x["rule"] for x in res["excepted"]}, {"pauses", "length"})
+        self.assertEqual({x["rule"] for x in res["excepted"]}, {"pauses", "length", "first word", "picture"})
         self.assertIn("EXCEPTION", (self.home / res["sheet"] / "verdict.txt").read_text(), "on the review sheet")
         rd = H.cli(self.home, "ready", slug)
         self.assertIn("ready:", rd.stdout)
@@ -1415,6 +1426,42 @@ class Quality(unittest.TestCase):
         r_ = H.cli(self.home, "ready", slug, check=False)
         self.assertEqual(r_.returncode, 1)
         self.assertIn("changed since it was rendered", r_.stdout)
+        # a hand-written exception for a rule that can't bend: ignored, and ls says so
+        self.S.emit("exception.granted", None, id="f0f0f0f0", project=slug, rule="ending", clip=None,
+                    fp="x", why="forged by hand", actor="agent")
+        self.assertNotIn("f0f0f0f0", H.cli(self.home, "exception", "ls", slug).stdout)
+        self.assertIn("INVALID", H.cli(self.home, "exception", "ls", slug, "--all").stdout)
+
+        # the clip changes after the grant: its exceptions lapse; reel-wide ones too
+        cur = next(c for c in self.clips(slug) if c["id"] == c2)
+        H.cli(self.home, "timeline", "trim", slug, c2, cur["in"], cur["out"] + 0.2)
+        ls = json.loads(H.cli(self.home, "exception", "ls", slug, "--json").stdout)
+        st_ = {x["rule"]: x["state"] for x in ls if x["state"] != "revoked" and x["rule"] != "ending"}
+        self.assertEqual(st_, {"pauses": "lapsed", "length": "lapsed", "first word": "granted", "picture": "lapsed"})
+        self.assertIn("LAPSED", H.cli(self.home, "exception", "ls", slug).stdout)
+        H.cli(self.home, "render", slug, timeout=900)
+        res, r = self.check(slug)
+        self.assertEqual(r["pauses"]["status"], "fail", "a lapsed exception covers nothing")
+        self.assertIn("lapsed", r["pauses"]["items"][0])
+        self.assertEqual(r["first word"]["status"], "excepted", "the unchanged clip keeps its exception")
+
+    def test_check_refuses_bytes_that_change_while_measured(self):
+        slug = self.render_clip("Moving target", 0.5, 3.0)
+        f = self.home / self.S.state()["projects"][slug]["exports"][-1]["file"]
+        n = sum(e["type"] == "check.done" for e in H.events(self.home))
+        orig = self.S.detect_black_freeze
+        def tamper(path):
+            out = orig(path)
+            with open(f, "ab") as fh:
+                fh.write(b"\0")
+            return out
+        self.S.detect_black_freeze = tamper
+        try:
+            with self.assertRaisesRegex(RuntimeError, "changed while it was being checked"):
+                self.S.check(slug)
+        finally:
+            self.S.detect_black_freeze = orig
+        self.assertEqual(sum(e["type"] == "check.done" for e in H.events(self.home)), n, "no record")
 
     # ---- choice ----
     def test_choices_are_logged_with_provenance_and_blind_rounds(self):
@@ -1433,10 +1480,19 @@ class Quality(unittest.TestCase):
         self.assertIn("timeline_sha", ch["options"][a])
         self.assertNotEqual(H.cli(self.home, "choose", slug, "zzzz", "--from", f"{a[:8]},{b[:8]}",
                                   check=False).returncode, 0, "the chosen one must have been shown")
+        with self.assertRaisesRegex(RuntimeError, "options that were shown"):
+            self.S.record_choice(slug, [], None)
+        # what a caller adds can't overwrite what the studio knows about an option
+        d = self.S.record_choice(slug, [a[:8]], a[:8], options={a[:8]: {"verdict": "ready", "file": "x.mp4",
+                                                                        "seen": "the caller's note"}})
+        self.assertEqual((d["options"][a]["verdict"], d["options"][a]["file"], d["options"][a]["seen"]),
+                         ("unchecked", exs[0]["file"], "the caller's note"))
         # blind: shuffled copies labelled A/B, the mapping in the log, the pick mapped back
         out = H.cli(self.home, "ab", slug).stdout
         rnd = [e["data"] for e in H.events(self.home) if e["type"] == "blind.round"][-1]
         self.assertEqual(set(rnd["labels"].values()), {a, b})
+        times = {(self.home / rnd["dir"] / f"{lab}.mp4").stat().st_mtime for lab in rnd["labels"]}
+        self.assertEqual(len(times), 1, "the copies' dates don't say which is newer")
         for lab, sha in rnd["labels"].items():
             self.assertEqual(self.S.receipt(self.home / rnd["dir"] / f"{lab}.mp4"), sha)
             self.assertNotIn(sha[:8], out, "the labels hide which is which")
