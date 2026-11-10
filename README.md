@@ -189,8 +189,8 @@ studio render P                   # export (loudness -14 LUFS); the UI shows it 
 studio check P [EXPORT] [--json]  # measure the export against QUALITY.md; review sheet; exit 1 on a fail
 studio ready P [EXPORT] [--json]  # exit 0 only if a check of these exact bytes passes
 studio exception grant P RULE [CLIP] --why TEXT | revoke P ID [--why TEXT] | ls P [--all]
-studio timeline onscreen P CLIP TEXT…   # declare on-screen text (a hook); no TEXT clears it
-studio timeline card P CLIP on|off       # a designed card: not "black picture"
+   (exception grant … --onscreen TEXT / --card: declare the hook as text in the picture, or a
+    designed card; an exception binds to the clip, or the whole story, as it is when granted)
 studio choose P CHOSEN|none --from A,B,C [--action pick|keep|rewrite|reject] [--note T]
 studio ab P [EXPORT…]             # blind A/B of versions; then: choose P A --round ROUND
 studio moments|draft|cut ID… | --all     # AI steps (moments and draft call the agent). A bare
@@ -249,10 +249,12 @@ spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 
 export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
 frozen picture (`blackdetect`, `freezedetect`), captions against a fresh transcription of the
 export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
-a cartoon, a card) is picture: never a pause. On-screen text declared with `timeline onscreen`
-counts as the hook; a clip declared with `timeline card` is a designed card, not black. A rule
-broken on purpose needs an exception, granted in words (`studio exception`, QUALITY.md); check
-marks it `EXC` with its reason. It writes a review
+a cartoon, a card) is picture: never a pause. A rule broken on purpose needs an exception,
+granted in words (`studio exception`, QUALITY.md), including the two things nothing measures:
+on-screen text as the hook (`--onscreen`) and a designed card (`--card`). Check marks them `EXC`
+with their reason; an exception granted on a clip (or story) that has changed since has lapsed,
+and check says so. The export is hashed before and after it's measured: if the bytes changed
+meanwhile, no record is written. It writes a review
 sheet next to the export, `exports/<name>.check/`: `cut-NN-….png` for the start, every cut and
 the end (12 frames, the waveform with speech in green, the words heard, a red line at the cut,
 1.5 s either side) and `contact.png` (24 frames of the whole export), plus `check.json` and
@@ -275,6 +277,8 @@ story; a moment's or draft's agent, model and prompt version, which `step.moment
 rewritten. `studio choose P CHOSEN --from A,B,C` logs one from the terminal; `studio ab P`
 sets up a blind A/B of versions (shuffled copies labelled A, B in `projects/P/blind/ROUND/`, the
 mapping in a `blind.round` event), and `studio choose P A --round ROUND` maps the pick back.
+The copies are real copies with identical dates (a clone keeps the export's dates, which would
+say which is newer); their sizes are still the exports' sizes, so don't look them up meanwhile.
 
 Still measured by eye: captions clear of the platform's buttons, and fades are made by
 construction (not measured).

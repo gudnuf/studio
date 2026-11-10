@@ -18,12 +18,12 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Lead-in before the first word | 0.05–0.15s |
 | Tail after the last word | ≥ 0.25s of decay before the cut |
 | Fades at every audio cut | 10–30ms, so no clicks |
-| Time to first word or on-screen text | ≤ 0.5s (on-screen text counts when it's declared: `timeline onscreen`) |
+| Time to first word or on-screen text | ≤ 0.5s (on-screen text is declared: an exception with `--onscreen`) |
 | Longest pause inside speech | ≤ 0.35s. A clip nobody speaks in (b-roll, a cartoon, a card) is picture, not a pause |
 | Shortest spoken piece | ≥ 1.5s, and it must be a complete thought (see judgment) |
 | Length | 15–35s by default; up to 60s only if every beat earns it |
 | Loudness | −14 LUFS integrated (±1), true peak ≤ −1 dBTP |
-| No black or frozen frames | none; a clip declared a designed card (`timeline card`) is not black |
+| No black or frozen frames | none, unless excepted (a designed card: an exception with `--card`) |
 | Captions match the audio | the export, re-transcribed, says what the captions say |
 | Captions stay clear of platform UI | nothing in the bottom ~20% or the right ~15% of a 9:16 frame |
 | Ending | the last spoken word is complete and is not filler ("yeah", "so", "um") |
@@ -41,12 +41,18 @@ itself when it can say why in words; bias toward trying, the operator tunes:
 ```bash
 studio exception grant P pauses CLIP --why "the beat after 'hours' is the reveal; the picture holds it"
 studio exception grant P length --why "12s, and every beat earns it"     # no CLIP: the whole reel
-studio exception ls P            # what's granted (--all: revoked too)
+studio exception grant P "first word" 1 --onscreen "3 hours a night" --why "the hook is the text"
+studio exception grant P picture 7 --card --why "the end card is a designed still"
+studio exception ls P            # what's granted, or lapsed (--all: revoked and invalid too)
 studio exception revoke P ID --why "that silence drags"                 # the operator, usually
 ```
 
 - Rules that may bend: `pauses`, `shortest`, `first word`, `picture`, `length`. The rest (a cut
   inside a word, loudness, captions against the audio, a filler ending) are defects, never choices.
+- An exception binds to what it was granted on: that clip as it was (media, in/out, effects), or
+  the whole story for one without a clip. If that changes, it lapses and must be granted again.
+- On-screen text that is the hook (`--onscreen`) and a designed card (`--card`) are declarations
+  nothing measures, so they are exceptions too: who declared them, why, revocable.
 - Every exception is an event (who, rule, clip or whole reel, why). `check` honors it, marks the
   rule `EXC` with the reason, and lists it in its output and in `verdict.txt` on the review sheet.
   The UI lists it under the video, with Revoke.

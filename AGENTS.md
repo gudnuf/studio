@@ -58,8 +58,8 @@ studio render P                                  # export; it shows under "Your 
 studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
 studio ready P                                   # exit 0 only if these exact bytes passed a check
 studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length
-studio timeline onscreen P CLIP "TEXT"           # declare text drawn in the picture (a hook)
-studio timeline card P CLIP on|off               # a designed card: not "black picture"
+studio exception grant P "first word" CLIP --onscreen "TEXT" --why "…"   # the hook is text in the picture
+studio exception grant P picture CLIP --card --why "…"   # a designed card: not "black picture"
 studio choose P CHOSEN --from A,B,C              # log a pick (preference data); ab P = blind A/B
 
 studio say "Trimmed clip 2 to start on 'privacy'." --re NOTE_ID
@@ -101,10 +101,16 @@ tell the operator which you granted. They may revoke it (`exception.revoked`, wi
 read those, they are how your taste gets tuned. Only `pauses`, `shortest`, `first word`,
 `picture` and `length` bend. A label word ("payoff", "hold") no longer exempts anything.
 
-On-screen text that is the hook (drawn or overlaid in the footage) counts for the first-word rule
-once declared: `timeline onscreen P CLIP "TEXT"`. A designed card (title on a plain ground) is
-declared with `timeline card P CLIP on`, so check doesn't call it black. A clip nobody speaks in is
-picture: its length is never counted as a pause.
+An exception binds to what it was granted on: the clip as it is now (media, in/out, every
+effect; not its label), or the whole story when no clip is named. Change that clip (or, for a
+reel-wide one, anything in the story) and it lapses: check says so and fails the rule again;
+grant it again if it still holds. So grant last, on the cut you mean.
+
+What the picture holds is declared the same way, because nothing measures it: on-screen text
+that is the hook (drawn or overlaid) is `exception grant P "first word" CLIP --onscreen "TEXT"
+--why "…"` on the opening clip; a designed card (title on a plain ground) is `exception grant P
+picture CLIP --card --why "…"`. They show as `EXC`, with what you declared, and can be revoked.
+A clip nobody speaks in is picture: its length is never counted as a pause.
 
 ### Choices
 
