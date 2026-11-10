@@ -34,9 +34,15 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if ! command -v ffmpeg >/dev/null || ! command -v whisper-cli >/dev/null \
+# --only rust needs just the toolchain: the lean devShells.rust (no ffmpeg/whisper/python).
+shell=$root; [[ $only == rust ]] && shell="$root#rust"
+if { [[ $only != rust ]] && { ! command -v ffmpeg >/dev/null || ! command -v whisper-cli >/dev/null; }; } \
    || { [[ -z $only || $only == rust ]] && [[ $(command -v cargo) != /nix/store/* ]]; }; then
-  exec nix develop "$root" --quiet -c bash "$here/run_all.sh" "${args[@]}" 2> >(grep -v "Git tree .* is dirty" >&2)
+  if [[ -n ${STUDIO_RUN_ALL_REENTERED:-} ]]; then
+    echo "run_all: the devshell ($shell) lacks the tools; not re-entering again" >&2; exit 1
+  fi
+  export STUDIO_RUN_ALL_REENTERED=1
+  exec nix develop "$shell" --quiet -c bash "$here/run_all.sh" "${args[@]}" 2> >(grep -v "Git tree .* is dirty" >&2)
 fi
 
 export STUDIO_TEST_TMP=${STUDIO_TEST_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/studio-test.XXXXXX")}

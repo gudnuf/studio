@@ -120,6 +120,8 @@
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.cargo-tauri ];
           STUDIO_VAD_MODEL = "${vadModelFor pkgs}";
         });
+        # just the Rust toolchain: CI and `test/run_all.sh --only rust`
+        rust = pkgs.mkShell (rust.env // { packages = rust.packages; });
       });
     };
 }
