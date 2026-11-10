@@ -1,0 +1,12 @@
+[package]
+name = "studio-ffi"
+description = "The UniFFI surface for the Apple app (panic containment at the seam)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "studio_ffi"
+
+[dependencies]

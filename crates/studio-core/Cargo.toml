@@ -1,0 +1,9 @@
+[package]
+name = "studio-core"
+description = "Log, fold, state, timeline model and verbs, check rules: pure functions, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

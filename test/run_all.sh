@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# studio: fixtures -> CLI tests -> server tests -> UI smoke (headless Chrome) -> benchmark.
+# studio: fixtures -> CLI tests -> server tests -> UI smoke (headless Chrome) -> Rust workspace
+# -> benchmark.
 # Exits nonzero on any failure.
 #
-#   test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|webkit|app|bench]
+#   test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|webkit|app|rust|bench]
 #
 #   ui      the operator path in headless Chrome
 #   webkit  the same core path in Safari (safaridriver; skipped until `sudo safaridriver --enable`)
 #   app     the built Mac app in its WKWebView (skipped until `nix build .#studio-app`; uses result/)
+#   rust    `cargo test --workspace` + clippy (-D warnings) over crates/, with the nix toolchain
 #
 #   --strict     bench budget misses (SLOW) also fail the run
 #   STUDIO_TEST_TMP   where temp homes, logs and bench.json go (default: a fresh mktemp dir)
 #   STUDIO_FIXTURES   fixture cache dir (default: ~/.cache/studio-fixtures; reused across runs)
 #   STUDIO_TEST_PORTS port range servers and Chrome may use (default 7400-7499)
 #
-# Re-enters itself inside `nix develop` when ffmpeg/whisper-cli aren't on PATH.
+# Re-enters itself inside `nix develop` when ffmpeg/whisper-cli aren't on PATH, or when the Rust
+# step will run and cargo isn't the pinned nix toolchain (nix/rust.nix).
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$here")"
 
-if ! command -v ffmpeg >/dev/null || ! command -v whisper-cli >/dev/null; then
-  exec nix develop "$root" --quiet -c bash "$here/run_all.sh" "$@" 2> >(grep -v "Git tree .* is dirty" >&2)
-fi
-
+args=("$@")
 bench=1 ui=1 strict="" only=""
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -33,6 +33,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if ! command -v ffmpeg >/dev/null || ! command -v whisper-cli >/dev/null \
+   || { [[ -z $only || $only == rust ]] && [[ $(command -v cargo) != /nix/store/* ]]; }; then
+  exec nix develop "$root" --quiet -c bash "$here/run_all.sh" "${args[@]}" 2> >(grep -v "Git tree .* is dirty" >&2)
+fi
 
 export STUDIO_TEST_TMP=${STUDIO_TEST_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/studio-test.XXXXXX")}
 export STUDIO_FIXTURES=${STUDIO_FIXTURES:-${XDG_CACHE_HOME:-$HOME/.cache}/studio-fixtures}
@@ -47,7 +52,7 @@ declare -a names results times
 fail=0
 run() {  # run NAME CMD...
   local name=$1; shift
-  [[ -n $only && $name != "$only" && $name != fixtures ]] && return 0
+  [[ -n $only && $name != "$only" && ( $name != fixtures || $only == rust ) ]] && return 0
   local t0=$SECONDS
   echo "━━ $name"
   "$@" 2>&1 | tee "$logs/$name.log"
@@ -58,7 +63,7 @@ run() {  # run NAME CMD...
 }
 
 run fixtures bash "$here/fixtures.sh" "$STUDIO_FIXTURES"
-if [[ ${results[0]} -ne 0 ]]; then echo "fixtures failed; stopping" >&2; exit 1; fi
+if [[ ${names[0]:-} == fixtures && ${results[0]} -ne 0 ]]; then echo "fixtures failed; stopping" >&2; exit 1; fi
 run cli    python3 "$here/test_cli.py" -v
 run server python3 "$here/test_server.py" -v
 if [[ $ui == 1 && -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
@@ -68,6 +73,7 @@ if [[ $ui == 1 && $(uname) == Darwin ]]; then
   run webkit python3 "$here/webkit_smoke.py"
   run app python3 "$here/app_smoke.py"
 fi
+run rust bash -c 'cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings'
 [[ $bench == 1 ]] && run bench python3 "$here/bench.py" --out "$STUDIO_TEST_TMP/bench.json" $strict
 
 # leftover servers from a crashed test would hold a port
@@ -86,6 +92,9 @@ for i in "${!names[@]}"; do
   elif [[ $n == ui || $n == webkit || $n == app ]]; then
     detail=$(grep -E "^SKIP" "$logs/$n.log" | head -1 | cut -c1-90)
     detail="$detail$(grep -E "^[0-9]+/[0-9]+ passed" "$logs/$n.log"; grep -E "^FAIL " "$logs/$n.log" | cut -c1-80 | tr '\n' ';')"
+  elif [[ $n == rust ]]; then
+    detail=$(awk '/^test result:/ {p+=$4; f+=$6} END {printf "%d passed, %d failed", p, f}' "$logs/$n.log")
+    grep -qE "^error(\[|:)" "$logs/$n.log" && detail="$detail  [errors: see log]"
   elif [[ $n == bench ]]; then
     detail=$(grep -E "metric\(s\) over budget" "$logs/$n.log")
   fi

@@ -1,7 +1,8 @@
 {
   description = "studio — raw footage to post drafts, local-first";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-  outputs = { self, nixpkgs, ... }:
+  inputs.rust-overlay = { url = "github:oxalica/rust-overlay"; inputs.nixpkgs.follows = "nixpkgs"; };
+  outputs = { self, nixpkgs, rust-overlay, ... }:
     let
       systems = [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ];
       darwin = [ "aarch64-darwin" ];
@@ -113,17 +114,12 @@
           default = { type = "app"; program = "${app}/Applications/Studio.app/Contents/MacOS/studio-app"; };
         });
 
-      devShells = forAll (pkgs: {
-        default = pkgs.mkShell {
-          packages = [ pkgs.ffmpeg-full pkgs.whisper-cpp pkgs.python3 ]
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
-              pkgs.rustc pkgs.cargo pkgs.cargo-tauri pkgs.rust-analyzer pkgs.clippy pkgs.rustfmt
-            ];
+      devShells = forAll (pkgs: let rust = import ./nix/rust.nix { inherit pkgs rust-overlay; }; in {
+        default = pkgs.mkShell (rust.env // {
+          packages = [ pkgs.ffmpeg-full pkgs.whisper-cpp pkgs.python3 ] ++ rust.packages
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.cargo-tauri ];
           STUDIO_VAD_MODEL = "${vadModelFor pkgs}";
-          # rust-analyzer needs the std sources
-          RUST_SRC_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin
-            "${pkgs.rustPlatform.rustLibSrc}";
-        };
+        });
       });
     };
 }

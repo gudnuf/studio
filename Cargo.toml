@@ -1,0 +1,23 @@
+# studio v2 Rust core (plan: studio-v2-rmp.md, "Repo layout"). The toolchain is pinned in
+# nix/rust.nix (rust-overlay, iOS targets included); enter it with `nix develop`.
+[workspace]
+resolver = "2"
+members = [
+  "crates/studio-core",
+  "crates/studio-net",
+  "crates/studio-media",
+  "crates/studio-cli",
+  "crates/stt",
+  "crates/ffi",
+]
+# desktop/ is the Tauri shell with its own Cargo.lock; it stays its own workspace until slice 4.
+exclude = ["desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+thiserror = "2"

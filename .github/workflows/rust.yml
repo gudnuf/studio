@@ -1,0 +1,17 @@
+# CI stub (plan task 0.5): the Rust workspace on x86_64-linux with the pinned nix toolchain.
+name: rust
+on:
+  push:
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", "nix/rust.nix", "flake.nix", "flake.lock", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", "nix/rust.nix", "flake.nix", "flake.lock", ".github/workflows/rust.yml"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix develop --quiet -c cargo test --workspace --locked
+      - run: nix develop --quiet -c cargo clippy --workspace --all-targets --locked -- -D warnings

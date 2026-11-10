@@ -1,0 +1,13 @@
+[package]
+name = "studio-cli"
+description = "The studio command line (binary `studio-rs` until it replaces studio.py)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "studio-rs"
+path = "src/main.rs"
+
+[dependencies]

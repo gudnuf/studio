@@ -1,0 +1,19 @@
+[package]
+name = "stt"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# Enabling `whisper` pulls the native stack (whisper-rs + vendored whisper.cpp, Metal).
+# OFF by default so `cargo test --workspace` stays hermetic and cross-platform.
+whisper = ["dep:whisper-rs"]
+
+[dependencies]
+thiserror = { workspace = true }
+whisper-rs = { version = "=0.16.0", optional = true }
+
+# Metal only on Apple targets (studio workers also run whisper on Linux). The iOS simulator
+# still gets the Metal build but turns the GPU off at runtime (`target_abi = "sim"`, whisper.rs).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+whisper-rs = { version = "=0.16.0", features = ["metal"], optional = true }
