@@ -32,3 +32,4 @@ qrcode = { version = "0.14", default-features = false }
 gethostname = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+zeroize = "1"

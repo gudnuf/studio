@@ -17,6 +17,7 @@ toml_edit = { workspace = true }
 base64 = { workspace = true }
 qrcode = { workspace = true }
 gethostname = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

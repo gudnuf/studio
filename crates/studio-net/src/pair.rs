@@ -9,6 +9,7 @@ use std::fmt;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{check_blossom, check_relay};
 use crate::keys::LibraryKeys;
@@ -28,6 +29,8 @@ pub enum PairError {
     BadKeys,
     #[error(transparent)]
     Url(#[from] crate::config::ConfigError),
+    #[error("pairing payload is too long for a QR code (too many relay/Blossom URLs)")]
+    TooLong,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -58,21 +61,26 @@ struct Wire {
     blossom: Vec<String>,
 }
 
+impl Drop for Wire {
+    fn drop(&mut self) {
+        self.nsec.zeroize();
+        self.age.zeroize();
+    }
+}
+
 impl Pairing {
     /// The payload text. It contains the library's secrets: never log it.
-    pub fn encode(&self) -> String {
+    pub fn encode(&self) -> Zeroizing<String> {
         let wire = Wire {
             v: VERSION,
-            nsec: self.keys.nsec(),
-            age: self.keys.age_secret(),
+            nsec: self.keys.nsec().to_string(),
+            age: self.keys.age_secret().to_string(),
             relays: self.relays.clone(),
             blossom: self.blossom.clone(),
         };
-        let json = serde_json::to_vec(&wire).expect("serialize pairing");
-        format!(
-            "{PREFIX}{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
-        )
+        let json = Zeroizing::new(serde_json::to_vec(&wire).expect("serialize pairing"));
+        let b64 = Zeroizing::new(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&*json));
+        Zeroizing::new(format!("{PREFIX}{}", b64.as_str()))
     }
 
     pub fn decode(text: &str) -> Result<Self, PairError> {
@@ -80,9 +88,11 @@ impl Pairing {
             .trim()
             .strip_prefix(PREFIX)
             .ok_or(PairError::NotAPayload)?;
-        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(body)
-            .map_err(|_| PairError::Damaged)?;
+        let json = Zeroizing::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(body)
+                .map_err(|_| PairError::Damaged)?,
+        );
         // Peek at the version first so a newer payload says so instead of "damaged".
         #[derive(Deserialize)]
         struct V {
@@ -92,25 +102,30 @@ impl Pairing {
         if v.v != VERSION {
             return Err(PairError::Version(v.v));
         }
-        let w: Wire = serde_json::from_slice(&json).map_err(|_| PairError::Damaged)?;
+        let mut w: Wire = serde_json::from_slice(&json).map_err(|_| PairError::Damaged)?;
         let keys = LibraryKeys::from_secrets(&w.nsec, &w.age).ok_or(PairError::BadKeys)?;
         w.relays.iter().try_for_each(|r| check_relay(r))?;
         w.blossom.iter().try_for_each(|b| check_blossom(b))?;
         Ok(Self {
             keys,
-            relays: w.relays,
-            blossom: w.blossom,
+            relays: std::mem::take(&mut w.relays),
+            blossom: std::mem::take(&mut w.blossom),
         })
     }
 
     /// The payload as a terminal QR (unicode half blocks, quiet zone included).
-    pub fn qr(&self) -> String {
-        let code = qrcode::QrCode::with_error_correction_level(self.encode(), qrcode::EcLevel::L)
-            .expect("payload fits in a QR code");
-        code.render::<qrcode::render::unicode::Dense1x2>()
+    /// Dark modules are drawn as blanks, light ones as blocks: right on a dark terminal,
+    /// inverted on a light one (iOS Camera reads both).
+    pub fn qr(&self) -> Result<String, PairError> {
+        let payload = self.encode();
+        let code =
+            qrcode::QrCode::with_error_correction_level(payload.as_bytes(), qrcode::EcLevel::L)
+                .map_err(|_| PairError::TooLong)?;
+        Ok(code
+            .render::<qrcode::render::unicode::Dense1x2>()
             .dark_color(qrcode::render::unicode::Dense1x2::Light)
             .light_color(qrcode::render::unicode::Dense1x2::Dark)
-            .build()
+            .build())
     }
 }
 
@@ -135,7 +150,10 @@ mod tests {
         assert_eq!(back, p);
         assert_eq!(back.keys.library_id(), p.keys.library_id());
         // whitespace from a copy/paste is fine
-        assert_eq!(Pairing::decode(&format!("  {text}\n")).unwrap(), p);
+        assert_eq!(
+            Pairing::decode(&format!("  {}\n", text.as_str())).unwrap(),
+            p
+        );
     }
 
     #[test]
@@ -154,15 +172,18 @@ mod tests {
             Err(PairError::Version(2))
         ));
         let k = LibraryKeys::generate();
-        let bad = format!(r#"{{"v":1,"nsec":"nsec1x","age":"{}"}}"#, k.age_secret());
+        let bad = format!(
+            r#"{{"v":1,"nsec":"nsec1x","age":"{}"}}"#,
+            k.age_secret().as_str()
+        );
         assert!(matches!(
             Pairing::decode(&format!("{PREFIX}{}", b64(&bad))),
             Err(PairError::BadKeys)
         ));
         let bad_url = format!(
             r#"{{"v":1,"nsec":"{}","age":"{}","relays":["http://x"]}}"#,
-            k.nsec(),
-            k.age_secret()
+            k.nsec().as_str(),
+            k.age_secret().as_str()
         );
         assert!(matches!(
             Pairing::decode(&format!("{PREFIX}{}", b64(&bad_url))),
@@ -173,16 +194,25 @@ mod tests {
     #[test]
     fn qr_renders_and_does_not_spell_the_secret() {
         let p = sample();
-        let q = p.qr();
+        let q = p.qr().unwrap();
         assert!(q.lines().count() > 20);
-        assert!(!q.contains(&p.keys.nsec()) && !q.contains(&p.keys.age_secret()));
+        assert!(!q.contains(p.keys.nsec().as_str()) && !q.contains(p.keys.age_secret().as_str()));
+    }
+
+    #[test]
+    fn an_oversized_payload_is_an_error_not_a_panic() {
+        let mut p = sample();
+        p.relays = (0..200)
+            .map(|i| format!("wss://relay-{i}.example.org/some/long/path"))
+            .collect();
+        assert!(matches!(p.qr(), Err(PairError::TooLong)));
     }
 
     #[test]
     fn debug_never_shows_a_secret() {
         let p = sample();
         let d = format!("{p:?}");
-        assert!(!d.contains(&p.keys.nsec()) && !d.contains(&p.keys.age_secret()));
-        assert!(!d.contains(&p.encode()));
+        assert!(!d.contains(p.keys.nsec().as_str()) && !d.contains(p.keys.age_secret().as_str()));
+        assert!(!d.contains(p.encode().as_str()));
     }
 }

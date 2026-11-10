@@ -5,8 +5,12 @@
 //!   `nostr.key`  the nsec (bech32), one line
 //!   `age.key`    age-keygen format: `# public key: age1…` comment + `AGE-SECRET-KEY-1…`
 //!
-//! `library_id` is the first 16 hex characters of the library's x-only public key.
-//! Nothing in this module prints or logs a secret; `Debug` is redacted.
+//! `library_id` is the first 16 hex characters of the library's x-only public key in hex (not
+//! of the bech32 npub). Nothing in this module prints or logs a secret; `Debug` is redacted,
+//! and the secret strings it hands out are zeroized on drop.
+//!
+//! Creation is serialized by an exclusive lock on `keys/.lock` and both files are opened with
+//! `create_new`, so two first runs at once end with one key, never a cross-bred pair.
 
 use std::fmt;
 use std::fs;
@@ -16,10 +20,12 @@ use std::str::FromStr;
 
 use age::secrecy::ExposeSecret;
 use nostr::nips::nip19::ToBech32;
+use zeroize::Zeroizing;
 
 pub const KEYS_DIR: &str = "keys";
 pub const NOSTR_FILE: &str = "nostr.key";
 pub const AGE_FILE: &str = "age.key";
+pub const LOCK_FILE: &str = ".lock";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
@@ -29,17 +35,29 @@ pub enum KeyError {
         #[source]
         source: std::io::Error,
     },
-    #[error("{0}: not a valid nostr secret key")]
+    #[error("{0}: not a valid nostr secret key. {RECOVER}")]
     BadNostr(PathBuf),
-    #[error("{0}: not a valid age identity")]
+    #[error("{0}: not a valid age identity. {RECOVER}")]
     BadAge(PathBuf),
-    #[error("{present} exists but {missing} does not; refusing to make a new key (that would split the library)")]
+    #[error("{present} exists but {missing} does not; refusing to make a new key (that would split the library). {RECOVER}")]
     Partial { present: PathBuf, missing: PathBuf },
     #[error("{path} is readable by others (mode {mode:o}); run: chmod 600 {path}")]
     Permissions { path: PathBuf, mode: u32 },
     #[error("{0} already holds a library key; refusing to overwrite it")]
     Exists(PathBuf),
+    #[error("{dir} belongs to library {has}; refusing to replace its keys with library {wanted}")]
+    OtherLibrary {
+        dir: PathBuf,
+        has: String,
+        wanted: String,
+    },
 }
+
+/// How to get out of a damaged `keys/`; part of every error that refuses to go on.
+pub const RECOVER: &str = "To recover: if this home's library was never used or synced, \
+delete keys/ and run again (that makes a new library); otherwise delete keys/ and run \
+`studio-rs pair --from -` with the payload from a device of the library, or restore keys/ \
+from your offline backup";
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> KeyError + '_ {
     move |source| KeyError::Io {
@@ -119,16 +137,18 @@ impl LibraryKeys {
     }
 
     /// The nostr secret as `nsec1…`. Only for the pairing payload and the key file.
-    pub(crate) fn nsec(&self) -> String {
-        self.nostr
-            .secret_key()
-            .to_bech32()
-            .expect("bech32 of a valid secret key")
+    pub(crate) fn nsec(&self) -> Zeroizing<String> {
+        Zeroizing::new(
+            self.nostr
+                .secret_key()
+                .to_bech32()
+                .expect("bech32 of a valid secret key"),
+        )
     }
 
     /// The age secret as `AGE-SECRET-KEY-1…`. Only for the pairing payload and the key file.
-    pub(crate) fn age_secret(&self) -> String {
-        self.age.to_string().expose_secret().to_string()
+    pub(crate) fn age_secret(&self) -> Zeroizing<String> {
+        Zeroizing::new(self.age.to_string().expose_secret().to_string())
     }
 
     pub fn dir(home: &Path) -> PathBuf {
@@ -170,34 +190,77 @@ impl LibraryKeys {
     }
 
     /// The home's key, generating and saving one on first run. `true` when it was just made.
+    /// Concurrent first runs agree on one key (the lock).
     pub fn load_or_create(home: &Path) -> Result<(Self, bool), KeyError> {
+        let _lock = lock(home)?;
         if let Some(k) = Self::load(home)? {
             return Ok((k, false));
         }
         let k = Self::generate();
-        k.save(home)?;
+        k.save_locked(home)?;
         Ok((k, true))
+    }
+
+    /// Makes these the home's keys (joining a library from a pairing payload). `Ok(false)`
+    /// when the home already holds exactly these keys; an error when it holds another
+    /// library's.
+    pub fn install(&self, home: &Path) -> Result<bool, KeyError> {
+        let _lock = lock(home)?;
+        match Self::load(home)? {
+            Some(k) if k == *self => Ok(false),
+            Some(k) => Err(KeyError::OtherLibrary {
+                dir: Self::dir(home),
+                has: k.library_id(),
+                wanted: self.library_id(),
+            }),
+            None => self.save_locked(home).map(|()| true),
+        }
     }
 
     /// Writes both key files (0600) in a 0700 `keys/`. Refuses if either file exists.
     pub fn save(&self, home: &Path) -> Result<(), KeyError> {
+        let _lock = lock(home)?;
+        self.save_locked(home)
+    }
+
+    fn save_locked(&self, home: &Path) -> Result<(), KeyError> {
         let dir = Self::dir(home);
         let (np, ap) = (dir.join(NOSTR_FILE), dir.join(AGE_FILE));
-        if np.exists() || ap.exists() {
-            return Err(KeyError::Exists(dir));
-        }
-        fs::create_dir_all(&dir).map_err(io(&dir))?;
-        set_mode(&dir, 0o700)?;
-        let age_file = format!(
+        let age_file = Zeroizing::new(format!(
             "# studio library {} age identity\n# public key: {}\n{}\n",
             self.library_id(),
             self.age_recipient(),
-            self.age_secret()
-        );
-        write_private(&ap, age_file.as_bytes())?;
-        write_private(&np, format!("{}\n", self.nsec()).as_bytes())?;
+            self.age_secret().as_str()
+        ));
+        let nostr_file = Zeroizing::new(format!("{}\n", self.nsec().as_str()));
+        write_private(&ap, age_file.as_bytes(), &dir)?;
+        if let Err(e) = write_private(&np, nostr_file.as_bytes(), &dir) {
+            // never leave half a key behind when we can help it
+            if !matches!(e, KeyError::Exists(_)) {
+                let _ = fs::remove_file(&ap);
+            }
+            return Err(e);
+        }
         Ok(())
     }
+}
+
+/// Holds `keys/.lock` exclusively until dropped (creating a 0700 `keys/` if needed).
+fn lock(home: &Path) -> Result<fs::File, KeyError> {
+    let dir = LibraryKeys::dir(home);
+    fs::create_dir_all(&dir).map_err(io(&dir))?;
+    set_mode(&dir, 0o700)?;
+    let p = dir.join(LOCK_FILE);
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let f = opts.open(&p).map_err(io(&p))?;
+    f.lock().map_err(io(&p))?;
+    Ok(f)
 }
 
 #[cfg(unix)]
@@ -210,7 +273,7 @@ fn set_mode(_: &Path, _: u32) -> Result<(), KeyError> {
     Ok(())
 }
 
-fn read_private(path: &Path) -> Result<String, KeyError> {
+fn read_private(path: &Path) -> Result<Zeroizing<String>, KeyError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -222,14 +285,14 @@ fn read_private(path: &Path) -> Result<String, KeyError> {
             });
         }
     }
-    fs::read_to_string(path).map_err(io(path))
+    fs::read_to_string(path)
+        .map(Zeroizing::new)
+        .map_err(io(path))
 }
 
-/// Creates `path` with mode 0600 from the start (never briefly world-readable), via a
-/// temporary sibling renamed into place.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeyError> {
-    let tmp = path.with_extension("tmp");
-    let _ = fs::remove_file(&tmp);
+/// Creates `path` (never an existing one) with mode 0600 from the first byte. A failed write
+/// removes what it made.
+fn write_private(path: &Path, bytes: &[u8], dir: &Path) -> Result<(), KeyError> {
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -237,11 +300,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), KeyError> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&tmp).map_err(io(&tmp))?;
-    f.write_all(bytes).map_err(io(&tmp))?;
-    f.sync_all().map_err(io(&tmp))?;
-    drop(f);
-    fs::rename(&tmp, path).map_err(io(path))
+    let mut f = opts.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            KeyError::Exists(dir.to_path_buf())
+        } else {
+            io(path)(e)
+        }
+    })?;
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
+        drop(f);
+        let _ = fs::remove_file(path);
+        return Err(io(path)(e));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -266,7 +337,6 @@ mod tests {
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&dir.join(NOSTR_FILE)), 0o600);
         assert_eq!(mode(&dir.join(AGE_FILE)), 0o600);
-        assert!(!dir.join("nostr.tmp").exists() && !dir.join("age.tmp").exists());
         let age_file = fs::read_to_string(dir.join(AGE_FILE)).unwrap();
         assert!(age_file.contains(&format!("# public key: {}", a.age_recipient())));
     }
@@ -285,8 +355,8 @@ mod tests {
     fn debug_never_shows_a_secret() {
         let k = LibraryKeys::generate();
         let d = format!("{k:?} {:#?}", k);
-        assert!(!d.contains(&k.nsec()));
-        assert!(!d.contains(&k.age_secret()));
+        assert!(!d.contains(k.nsec().as_str()));
+        assert!(!d.contains(k.age_secret().as_str()));
         assert!(!d.contains(&k.nostr().secret_key().to_secret_hex()));
         assert!(d.contains(&k.library_id()));
     }
@@ -296,10 +366,41 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         LibraryKeys::generate().save(home.path()).unwrap();
         fs::remove_file(LibraryKeys::dir(home.path()).join(AGE_FILE)).unwrap();
-        assert!(matches!(
-            LibraryKeys::load_or_create(home.path()),
-            Err(KeyError::Partial { .. })
-        ));
+        let err = LibraryKeys::load_or_create(home.path()).unwrap_err();
+        assert!(matches!(err, KeyError::Partial { .. }));
+        assert!(err.to_string().contains("To recover"), "{err}");
+        assert!(!LibraryKeys::dir(home.path()).join(AGE_FILE).exists());
+    }
+
+    #[test]
+    fn concurrent_first_runs_agree_on_one_key() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().to_path_buf();
+        let got: Vec<LibraryKeys> = (0..16)
+            .map(|_| {
+                let p = path.clone();
+                std::thread::spawn(move || LibraryKeys::load_or_create(&p).unwrap().0)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        let on_disk = LibraryKeys::load(&path).unwrap().unwrap();
+        assert!(
+            got.iter().all(|k| *k == on_disk),
+            "every run saw the key on disk"
+        );
+    }
+
+    #[test]
+    fn install_joins_once_and_refuses_another_library() {
+        let home = tempfile::tempdir().unwrap();
+        let k = LibraryKeys::generate();
+        assert!(k.install(home.path()).unwrap());
+        assert!(!k.install(home.path()).unwrap());
+        let err = LibraryKeys::generate().install(home.path()).unwrap_err();
+        assert!(matches!(err, KeyError::OtherLibrary { .. }));
+        assert_eq!(LibraryKeys::load(home.path()).unwrap().unwrap(), k);
     }
 
     #[test]

@@ -137,10 +137,29 @@ fn pair_round_trip_between_two_homes_and_secrets_stay_in_keys() {
     let cfg_b = fs::read_to_string(b.path().join("studio.toml")).unwrap();
     assert!(cfg_b.contains("ws://nous.local:7777") && cfg_b.contains("http://nous.local:3000"));
 
-    // again: idempotent
-    let (_, err) = ok(&run(b.path(), &["pair", "--from", payload.trim()], None));
+    // again, from a file: idempotent
+    let pf = tempfile::tempdir().unwrap();
+    let pfile = pf.path().join("payload.txt");
+    fs::write(&pfile, &payload).unwrap();
+    let (_, err) = ok(&run(
+        b.path(),
+        &["pair", "--from", pfile.to_str().unwrap()],
+        None,
+    ));
     assert!(err.contains("already paired"), "{err}");
-    transcript.push(("pair --from (again) stderr", err));
+    transcript.push(("pair --from FILE (again) stderr", err));
+
+    // the payload itself as an argument is refused before anything is written
+    let d = tempfile::tempdir().unwrap();
+    let o = run(d.path(), &["pair", "--from", payload.trim()], None);
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(
+        err.contains("not the payload itself") && err.contains("--from -"),
+        "{err}"
+    );
+    assert!(!d.path().join("keys").exists(), "nothing written");
+    transcript.push(("argv payload stderr", err));
 
     // a home that already has another library refuses, and keeps its key
     let c = tempfile::tempdir().unwrap();
@@ -156,12 +175,8 @@ fn pair_round_trip_between_two_homes_and_secrets_stay_in_keys() {
     // a damaged payload says so without echoing it
     let o = run(
         b.path(),
-        &[
-            "pair",
-            "--from",
-            &payload.trim().replace("studio-pair:", "studio-pair:!"),
-        ],
-        None,
+        &["pair", "--from", "-"],
+        Some(&payload.trim().replace("studio-pair:", "studio-pair:!")),
     );
     assert!(!o.status.success());
     transcript.push((
@@ -210,4 +225,59 @@ fn pair_needs_a_mode() {
         !h.path().join("keys").exists(),
         "no key made without a mode"
     );
+}
+
+#[test]
+fn a_bad_studio_toml_fails_before_any_key_is_made() {
+    for args in [&["pair", "--qr"][..], &["pair", "--payload"][..]] {
+        let h = tempfile::tempdir().unwrap();
+        fs::write(
+            h.path().join("studio.toml"),
+            "[sync]\nrelays = [\"http://x\"]\n",
+        )
+        .unwrap();
+        let o = run(h.path(), args, None);
+        assert!(!o.status.success());
+        assert!(!h.path().join("keys").exists(), "{args:?} made a key");
+    }
+    // joining: the payload is fine, the home's config is not
+    let src = tempfile::tempdir().unwrap();
+    let (payload, _) = ok(&run(src.path(), &["pair", "--payload"], None));
+    let h = tempfile::tempdir().unwrap();
+    fs::write(h.path().join("studio.toml"), "[sync\n").unwrap();
+    let o = run(h.path(), &["pair", "--from", "-"], Some(&payload));
+    assert!(!o.status.success());
+    assert!(!h.path().join("keys").exists());
+}
+
+#[test]
+fn concurrent_first_runs_hand_out_one_library() {
+    let h = tempfile::tempdir().unwrap();
+    let kids: Vec<_> = (0..8)
+        .map(|_| {
+            Command::new(bin())
+                .args(["pair", "--payload"])
+                .env("STUDIO_HOME", h.path())
+                .env_remove("STUDIO_RELAY")
+                .env_remove("STUDIO_BLOSSOM")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let outs: Vec<String> = kids
+        .into_iter()
+        .map(|c| {
+            let o = c.wait_with_output().unwrap();
+            assert!(o.status.success());
+            String::from_utf8(o.stdout).unwrap()
+        })
+        .collect();
+    assert!(
+        outs.iter().all(|o| o == &outs[0]),
+        "every run printed the same library"
+    );
+    let (again, _) = ok(&run(h.path(), &["pair", "--payload"], None));
+    assert_eq!(again, outs[0], "and it is the one on disk");
 }

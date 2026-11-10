@@ -2,7 +2,9 @@
 //! for now it has one verb, `pair`.
 //!
 //! Secrets: no command prints a key or the pairing payload except `pair --payload`, which
-//! exists to print it. Status lines go to stderr and name the library by id and npub only.
+//! exists to print it, and no command takes one as an argument (argv lands in shell history
+//! and `ps`): `pair --from` reads stdin or a file. Status lines go to stderr and name the
+//! library by id and npub only.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -11,7 +13,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use studio_net::config::Config;
 use studio_net::keys::LibraryKeys;
-use studio_net::pair::Pairing;
+use studio_net::pair::{Pairing, PREFIX};
+use zeroize::Zeroizing;
 
 #[derive(Parser)]
 #[command(name = "studio-rs", about = "studio, the Rust core (v2, in progress)")]
@@ -33,9 +36,10 @@ enum Cmd {
         /// Print the pairing payload as text, for pasting into `pair --from` on another home.
         #[arg(long, group = "mode")]
         payload: bool,
-        /// Join the library in PAYLOAD (`-` reads it from stdin, keeping it out of `ps` and
-        /// shell history). Writes keys/ and the [sync] servers in studio.toml.
-        #[arg(long, value_name = "PAYLOAD", group = "mode")]
+        /// Join the library whose payload is on stdin (`-`) or in FILE; never pass the payload
+        /// itself as an argument (shell history, `ps`). Writes keys/ and the [sync] servers
+        /// in studio.toml. Example: `pbpaste | studio-rs pair --from -`.
+        #[arg(long, value_name = "-|FILE", group = "mode")]
         from: Option<String>,
     },
 }
@@ -70,7 +74,7 @@ fn run(cli: Cli) -> Res {
     match cli.cmd {
         Cmd::Pair { qr, payload, from } => match (qr, payload, from) {
             (_, _, Some(src)) => pair_from(&src),
-            (false, false, None) => Err("pair: pass --qr, --payload or --from PAYLOAD".into()),
+            (false, false, None) => Err("pair: pass --qr, --payload or --from -|FILE".into()),
             (_, show_text, None) => pair_show(show_text),
         },
     }
@@ -78,6 +82,8 @@ fn run(cli: Cli) -> Res {
 
 fn pair_show(as_text: bool) -> Res {
     let home = home();
+    // config first: a bad studio.toml must not leave a fresh key behind
+    let cfg = Config::effective(&home)?;
     std::fs::create_dir_all(&home)?;
     let (keys, created) = LibraryKeys::load_or_create(&home)?;
     if created {
@@ -86,16 +92,15 @@ fn pair_show(as_text: bool) -> Res {
             LibraryKeys::dir(&home).display()
         );
     }
-    let cfg = Config::effective(&home)?;
     let p = Pairing {
         keys,
         relays: cfg.sync.relays,
         blossom: cfg.sync.blossom,
     };
     if as_text {
-        println!("{}", p.encode());
+        println!("{}", p.encode().as_str());
     } else {
-        print!("{}", p.qr());
+        print!("{}", p.qr()?);
         println!();
     }
     eprintln!("library {}  {}", p.keys.library_id(), p.keys.npub());
@@ -114,50 +119,50 @@ fn pair_show(as_text: bool) -> Res {
 }
 
 fn pair_from(src: &str) -> Res {
-    let text = if src == "-" {
-        let mut s = String::new();
-        std::io::stdin().read_to_string(&mut s)?;
-        s
+    if src.trim_start().starts_with(PREFIX) {
+        return Err(String::from(
+            "pair --from takes - (stdin) or a file, not the payload itself: as an argument it \
+             lands in shell history and `ps`. It is the library's secret keys, so remove it from \
+             your history now, then run: pbpaste | studio-rs pair --from -   (or save it to a \
+             file and pass the path). Nothing was written.",
+        )
+        .into());
+    }
+    let mut text = Zeroizing::new(String::new());
+    if src == "-" {
+        std::io::stdin().read_to_string(&mut text)?;
     } else {
-        src.to_string()
-    };
+        let path = std::path::Path::new(src);
+        if !path.is_file() {
+            return Err(format!("pair --from: {src}: no such file (use - for stdin)").into());
+        }
+        std::fs::File::open(path)?.read_to_string(&mut text)?;
+    }
     let p = Pairing::decode(&text)?;
     let home = home();
+    // validate what is there before touching keys/: config errors must not follow a key write
+    let cur = Config::load(&home)?.sync;
     std::fs::create_dir_all(&home)?;
-    match LibraryKeys::load(&home)? {
-        Some(existing) if existing == p.keys => {
-            eprintln!("already paired with library {}", p.keys.library_id());
-        }
-        Some(existing) => {
-            return Err(format!(
-                "{} already belongs to library {}; refusing to replace its keys with library {}",
-                home.display(),
-                existing.library_id(),
-                p.keys.library_id()
-            )
-            .into());
-        }
-        None => {
-            p.keys.save(&home)?;
-            eprintln!(
-                "paired with library {}  {}",
-                p.keys.library_id(),
-                p.keys.npub()
-            );
-        }
+    if p.keys.install(&home)? {
+        eprintln!(
+            "paired with library {}  {}",
+            p.keys.library_id(),
+            p.keys.npub()
+        );
+    } else {
+        eprintln!("already paired with library {}", p.keys.library_id());
     }
     // An empty list in the payload means "not set there", not "forget mine".
     if !p.relays.is_empty() || !p.blossom.is_empty() {
-        let cur = Config::load(&home)?.sync;
         let relays = if p.relays.is_empty() {
             cur.relays
         } else {
-            p.relays
+            p.relays.clone()
         };
         let blossom = if p.blossom.is_empty() {
             cur.blossom
         } else {
-            p.blossom
+            p.blossom.clone()
         };
         Config::write_sync_servers(&home, &relays, &blossom)?;
     }
