@@ -3,7 +3,7 @@
 
 import * as api from './api.js';
 import { layout, same, indexOf, clipAt, merge3 } from './ops.js';
-import { throttle, debounce, clamp, fmtT, isAgent } from './util.js';
+import { throttle, debounce, clamp, fmtT, isAgent, toast } from './util.js';
 
 const listeners = new Map();
 export function on(evt, fn) {
@@ -209,8 +209,9 @@ async function save() {
   setSave('saving');
   inflight = api.putTimeline(slug, body, S.rev[slug] ?? 0);   // 0: nobody has saved this story yet
   try {
-    const { timeline: res, rev } = await inflight;
+    const { timeline: res, rev, warnings } = await inflight;
     if (rev != null) S.rev[slug] = rev;
+    for (const w of warnings || []) toast(w.replace(/^warning: /, 'B-roll: ').replace(/ P /, ` ${slug} `), { kind: 'error', ms: 9000 });
     if (S.slug === slug && S.editSeq === seq) {
       S.savedSeq = seq;
       S.saveCount++;

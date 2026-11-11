@@ -185,6 +185,26 @@ class Server(unittest.TestCase):
               and e["data"]["project"] == slug][-1]
         self.assertEqual(ev["data"].get("actor"), "operator")
 
+    def test_put_timeline_says_what_it_did_to_the_b_roll(self):
+        """A UI save that cuts into a cover piece or leaves one with no words to show over comes
+        back with the same warnings the CLI prints (X-Cover-Warnings), for the UI to toast."""
+        slug = self.new_project("Cover warn")
+        pt, sr = self.mid("phone-talking.mov"), self.mid("screen-recording.mp4")
+        clip = {"id": "k1", "media": pt, "in": 1.0, "out": 9.0,
+                "cover": [{"media": sr, "in": 0.0, "out": 2.0, "at": 2.0}, {"media": sr, "in": 3.0, "out": 4.0, "at": 7.0}]}
+        tl = {"aspect": "9:16", "captions": False, "clips": [clip]}
+        st, hdrs, _ = self.srv.request("PUT", f"/api/projects/{slug}/timeline?base=0", tl)
+        self.assertEqual(st, 200)
+        self.assertNotIn("x-cover-warnings", hdrs)
+        rev = int(hdrs["x-timeline-rev"])
+        st, hdrs, data = self.srv.request("PUT", f"/api/projects/{slug}/timeline?base={rev}",
+                                          {**tl, "clips": [{**clip, "out": 3.0}]})       # a trim, in the UI
+        self.assertEqual(st, 200)
+        said = json.loads(hdrs["x-cover-warnings"])
+        self.assertTrue(any("cover 1 now shows 1.00s of the 2.00s" in m for m in said), said)
+        self.assertTrue(any("cover 2 now shows nothing" in m for m in said), said)
+        self.assertEqual(len(json.loads(data)["clips"][0]["cover"]), 2, "kept for a trim back")
+
     def test_put_timeline_stale_base_is_refused(self):
         """?base=<rev> guards the operator's save against overwriting a CLI edit it never saw."""
         slug = self.new_project("Stale Guard")

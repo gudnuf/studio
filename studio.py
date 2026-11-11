@@ -1062,10 +1062,13 @@ def normalize_timeline(tl, lib, problems=None):
 def normalize_cover(pieces, lib, tag, say, clip):
     """A clip's cover pieces ({media, in, out, at, fit?, to_end?}: see "cover" below), laid in
     stored order (a later piece cuts what it lands on, so pieces never overlap) and sorted by
-    `at`. A piece that points nowhere, is audio-only, isn't finite numbers, covers no time,
-    starts past the end of its footage or is laid outside the clip is dropped with a warning
-    (the clip keeps its own picture there). Nothing is clamped: cover_plan says what shows,
-    and `check` fails `cover short`. Problems are kind "cover": they never block a save."""
+    `at`. A piece that points nowhere, is audio-only, isn't finite numbers, is laid over fewer
+    than COVER_FRAMES frames (cover_frames: the same count `timeline cover` refuses on) or
+    starts past the end of its footage is dropped with a warning (the clip keeps its own
+    picture there). A piece laid outside the clip's in-out is kept: it shows nothing until a
+    trim brings its words back. Nothing is clamped: cover_plan says what shows, and `check`
+    fails `cover short`. Normalizing twice changes nothing. Problems are kind "cover": they
+    never block a save."""
     lay = {"in": clip["in"], "out": clip["out"], "pace": clip.get("pace", 1), "cover": []}
     for k, p in enumerate(pieces if isinstance(pieces, list) else []):
         p = p if isinstance(p, dict) else {}
@@ -1087,24 +1090,43 @@ def normalize_cover(pieces, lib, tag, say, clip):
             b = at + pout - pin
             at, pin = at - pin * clip_pace(clip), 0.0
             pout = b - at
-        if pout - pin < COVER_MIN and not p.get("to_end"):
-            say("cover", f"warning: {what} dropped: it covers {max(0.0, pout - pin):.3f}s (under {COVER_FRAMES} frames)")
-            continue
-        if pin > it["duration"] - COVER_MIN:
-            say("cover", f"warning: {what} dropped: starts at {pin:.2f}s of a {it['duration']:.2f}s file")
-            continue
         piece = {"media": p["media"], "in": cover_r3(pin), "out": cover_r3(pout), "at": cover_r3(at)}
         if p.get("fit") in FITS:
             piece["fit"] = p["fit"]
         if p.get("to_end") is True:
             piece["to_end"] = True
-        f0, fe = cover_plan({**clip, "cover": [piece]}, {})[1][0]["laid"]
-        if fe - f0 < COVER_FRAMES:
-            say("cover", f"warning: {what} dropped: laid outside the clip (source {piece['at']:.2f}–"
-                         f"{cover_to(piece, clip):.2f}s; the clip is {clip['in']:.2f}–{clip['out']:.2f}s)")
+        else:
+            piece["out"] = cover_r3(max(pout, pin))
+        bad = cover_bad(piece, clip, it)
+        if bad:
+            say("cover", f"warning: {what} dropped: {bad}")
             continue
         lay["cover"] = cover_add(lay, piece)
-    return sorted(lay["cover"], key=lambda p: p["at"])
+    out = []                           # what laying one on another left must hold too
+    for p in lay["cover"]:
+        bad = cover_bad(p, clip, lib.get(p["media"]))
+        if bad:
+            say("cover", f"warning: {tag}: a remainder of a cover piece dropped: {bad}")
+        else:
+            out.append(p)
+    return sorted(out, key=lambda p: p["at"])
+
+def cover_frames(p, clip):
+    """How many export frames piece p is laid over, counted as cover_plan counts them but
+    wherever the clip's ends are (a `to_end` piece: to the clip's last frame)."""
+    a, pace = clip["in"], clip_pace(clip)
+    f0 = round((p["at"] - a) * 30 / pace)
+    fe = clip_frames(clip) if p.get("to_end") else round((p["at"] - a + p["out"] - p["in"]) * 30 / pace)
+    return fe - f0
+
+def cover_bad(p, clip, it):
+    """Why a stored piece can't be kept (None = it can): the one rule `timeline cover` and every
+    save use, so a piece laid is never dropped at its save."""
+    if not p.get("to_end") and cover_frames(p, clip) < COVER_FRAMES:
+        return f"it is laid over {max(0, cover_frames(p, clip))} frames (under {COVER_FRAMES})"
+    if p["in"] > float(it["duration"]) - COVER_MIN:
+        return f"it starts at {p['in']:.2f}s of a {float(it['duration']):.2f}s file"
+    return None
 
 FITS = ("fill", "fit")
 
@@ -1168,7 +1190,9 @@ def cover_plan(clip, lib):
     'nothing'}. A piece is cut where its footage runs out (whole frames from its start, so
     never a cloned frame); a sliver of the clip's own picture under COVER_FRAMES between or
     after pieces goes to the piece before it while its footage lasts, else to the piece after
-    it if it has footage before what it showed (never before its IN), else stays."""
+    it if it has footage before what it showed (never before its IN), else stays; one before the
+    first piece always goes to it (b-roll on the clip's first frame, its footage from IN at the
+    earliest, a frame or two sooner than laid)."""
     n, pace, a = clip_frames(clip), clip_pace(clip), clip["in"]
     # the frame a source offset lands on, rounded exactly as renders always have (so a stored
     # story draws the frames it always drew)
@@ -1206,8 +1230,11 @@ def cover_plan(clip, lib):
             x["f1"] = gap_end
         elif sliver(g) and not last:
             back(pcs[i + 1], x["f1"])
-    if pcs and sliver(pcs[0]["f0"]):        # before the first one: the same, backwards
-        back(pcs[0], 0)
+    if pcs and sliver(pcs[0]["f0"]):        # before the first one: the b-roll starts on the clip's
+        y = pcs[0]                          # first frame (as renders always did), from footage
+        t0 = max(y["piece"]["in"], y["t0"] - y["f0"] / 30)   # before what it showed, never before IN
+        y["avail"] = math.floor((y["dur"] - t0) * 30 + 1e-6)
+        y["f0"], y["t0"], y["f1"] = 0, t0, min(y["f1"], y["avail"])
     spans, t = [], 0
     for x in pcs:
         if x["f0"] > t:
@@ -1257,11 +1284,15 @@ def cover_add(clip, piece):
             continue
         if p0 < a0 - 1e-3:
             q = {k: v for k, v in p.items() if k != "to_end"}
-            out.append({**q, "out": cover_r3(p["in"] + a0 - p0)})
+            q["out"] = cover_r3(p["in"] + a0 - p0)
+            if cover_frames(q, clip) >= COVER_FRAMES:      # a sliver left over is the new piece's
+                out.append(q)
         if p1 > a1 + 1e-3:
             fin = cover_r3(p["in"] + (a1 - p0) / pace)
-            out.append({**p, "in": fin, "at": cover_r3(a1),
-                        "out": cover_r3(fin + (p["out"] - p["in"]) - (a1 - p0))})
+            q = {**p, "in": fin, "at": cover_r3(a1),
+                 "out": cover_r3(fin + ((clip["out"] - a1) if p.get("to_end") else p1 - a1))}
+            if p.get("to_end") or cover_frames(q, clip) >= COVER_FRAMES:
+                out.append(q)
     return sorted(out + [piece], key=lambda p: p["at"])
 
 def cover_cut(cover, s1, s2, pace, cin, lib=None):
@@ -4341,82 +4372,113 @@ def tighten_clip(c, regions, mx=0.35, to=TIGHT_TO, lib=None, notes=None):
 COVER_USAGE = ("timeline cover PROJECT CLIP --with MEDIA IN [OUT] [--at T] "
                "[--until U | --until-end | --fill] [--fit fill|fit]")
 
+def lay_cover(lib, c, mid, pin, pout=None, at=None, until=None, until_end=False, fill=False,
+              fit=None, tips=True):
+    """Lay a piece on clip c, from `timeline cover`'s arguments in reel time (at/until: seconds
+    into the clip as it plays, after its pace; pin/pout: seconds of media mid, which plays at
+    normal speed, so pout - pin is also the seconds it covers). Converts to the stored shape
+    (laid over the clip's source seconds) and judges it by cover_frames and cover_plan, the
+    counts every save and the render use, so what is laid is what is kept and drawn.
+    Returns {"cover", "piece", "x" (its plan entry)} or {"error", "tips": [(text, args)]};
+    every tip is tried before it is offered (args: the arguments that change)."""
+    it = lib.get(mid) or {}
+    name, dur = it.get("name", mid), float(it.get("duration") or 0)
+    args = dict(pin=pin, pout=pout, at=at, until=until, until_end=until_end, fill=fill)
+    for what, x in (("IN", pin), ("OUT", pout), ("--at", at), ("--until", until)):
+        if x is not None and not (isinstance(x, (int, float)) and math.isfinite(x)):
+            return {"error": f"{what} must be a number of seconds (got {x})", "tips": []}
+    ways = [w for w, on in (("OUT", pout is not None), ("--until", until is not None),
+                            ("--until-end", until_end), ("--fill", fill)) if on]
+    if len(ways) != 1:
+        return {"error": "say how far the piece goes, one way: OUT (seconds in MEDIA), --until U "
+                         "(seconds into the clip), --until-end, or --fill (the whole clip)"
+                         + (f"; got {' and '.join(ways)}" if ways else ""), "tips": []}
+    if fill and at:
+        return {"error": "--fill covers the whole clip from 0; to start later use --at T --until-end", "tips": []}
+    L, pace, n = clip_len(c), clip_pace(c), clip_frames(c)
+    start = float(at or 0)
+    down = lambda x: math.floor(x * 100 + 1e-6) / 100     # a number as printed, never past it
+    instead = (" (instead of OUT)" if pout is not None else " (instead of --fill)" if fill
+               else " (instead of --until-end)" if until_end else "")
+    def works(**ch):                                     # a tip, tried
+        r = lay_cover(lib, c, mid, **{**args, **ch, "fit": fit, "tips": False})
+        return "cover" in r
+    def offer(make, v, step):          # make(v) = (text, args): the printed number, stepped until it works
+        for _ in range(40):
+            if v < 0:
+                break
+            text, ch = make(v)
+            if works(**ch):
+                return [(text, ch)]
+            v = round(v + step, 2)
+        return []
+    def no(error, *tip_list):                           # tip_list: thunks, run only when asked
+        return {"error": error, "tips": [t for f in tip_list for t in f()] if tips else []}
+    if not 0 <= pin <= dur - COVER_MIN:
+        return no(f"IN {pin:g}s is outside {name} (it is {dur:.2f}s long)")
+    if start < 0 or start > L:
+        return no(f"--at is seconds into the clip as it plays: 0–{L:.2f}s (the clip plays {L:.2f}s)",
+                  lambda: offer(lambda v: (f"--at {v:.2f}", {"at": v, "fill": False, "until_end": until_end or fill}), down(max(0.0, L - COVER_MIN)), -0.01))
+    end = start + pout - pin if pout is not None else until
+    piece = {"media": mid, "in": cover_r3(pin), "at": cover_r3(c["in"] + start * pace)}
+    if end is None:
+        piece.update(out=cover_r3(pin + c["out"] - piece["at"]), to_end=True)
+    else:
+        piece["out"] = cover_r3(pin + max(0.0, end - start) * pace)
+    if fit:
+        piece["fit"] = fit
+    frames = cover_frames(piece, c)
+    if frames < COVER_FRAMES:
+        return no(f"a piece covers at least {COVER_FRAMES} frames ({COVER_MIN:g}s); this one is laid "
+                  f"over {max(0, frames)}",
+                  lambda: offer(lambda v: (f"--until {v:.2f}{instead}", {"pout": None, "until": v, "until_end": False, "fill": False}), down(start + 0.11), 0.01))
+    if end is not None and end > L + 1e-3:
+        return no(f"{start:.2f}–{end:.2f}s runs {end - L:.2f}s past the clip's end (it plays {L:.2f}s)",
+                  lambda: offer(lambda v: (f"--until {v:.2f}{instead}", {"pout": None, "until": v, "until_end": False, "fill": False}), down(L), -0.01),
+                  lambda: offer(lambda v: (f"OUT {v:.2f}", {"pout": v}), down(pin + L - start), -0.01),
+                  lambda: [("--until-end (instead of OUT)" if pout is not None else "--until-end (instead of --until)",
+                           {"pout": None, "until": None, "until_end": True})]
+                  if works(pout=None, until=None, until_end=True) else [])
+    cover = cover_add(c, piece)
+    _, info = cover_plan({**c, "cover": cover}, lib)
+    x = next(x for x in info if x["piece"] is piece)
+    if x["short"] or not x["shown"]:
+        why = cover_short_text(x, name) if x["shown"] else "it would show nothing"
+        f0, fe = x["laid"]
+        need = (fe - f0) / FPS
+        return no(f"{name} is too short for what was asked: {why}. Covering {f0 / FPS:.2f}–{fe / FPS:.2f}s "
+                  f"of the clip from {pin:.2f}s needs {name} to run to {pin + need:.2f}s; it is {dur:.2f}s long",
+                  lambda: offer((lambda v: (f"IN {v:.2f} OUT {v + pout - pin:.2f}",
+                                            {"pin": v, "pout": round(v + pout - pin, 2)})) if pout is not None
+                                else (lambda v: (f"IN {v:.2f}", {"pin": v})), down(dur - need - 1 / FPS), -0.01),
+                  lambda: offer(lambda v: (f"--until {v:.2f}{instead}", {"pout": None, "until": v, "until_end": False, "fill": False}),
+                                down(start + dur - pin), -0.01))
+    return {"cover": cover, "piece": piece, "x": x}
+
 def cover_piece(st, a, c, i, clips):
-    """The cover `timeline cover` lays on clip c (index i of clips), from arguments in reel
-    time: --at T and --until U are seconds into the clip as it plays (after its pace); IN and
-    OUT are seconds of MEDIA, which plays at normal speed, so OUT - IN is also the seconds it
-    covers. Converted to the stored shape (laid over the clip's source seconds), checked
-    against cover_plan (the frames the render will draw) and said back. Anything it can't do
-    exactly as asked is refused with what would work, never clamped. Returns the new cover."""
+    """`timeline cover`: lay_cover from the command line, refused with tips that work, or said
+    back in reel time. Returns the clip's new cover."""
     w = a.cover_with
     if not w or len(w) not in (2, 3):
         sys.exit(COVER_USAGE)
     mid = video_arg(st, w[0], w[0])
-    it = st["media"][mid]
-    name, dur = it["name"], float(it["duration"])
+    name = st["media"][mid]["name"]
     try:
         pin, pout = float(w[1]), (float(w[2]) if len(w) == 3 else None)
     except ValueError:
         sys.exit(f"cover: IN and OUT are seconds in {name}\n{COVER_USAGE}")
-    for what, x in (("IN", pin), ("OUT", pout), ("--at", a.at), ("--until", a.until)):
-        if x is not None and not math.isfinite(x):     # nan/inf pass every comparison below
-            sys.exit(f"cover: {what} must be a number of seconds (got {x}). Nothing was laid")
-    down = lambda x: math.floor(x * 100 + 1e-6) / 100    # a suggested number that fits as printed
-    ways = [x for x, on in (("OUT", pout is not None), ("--until", a.until is not None),
-                            ("--until-end", a.until_end), ("--fill", a.fill)) if on]
-    if len(ways) != 1:
-        sys.exit("cover: say how far the piece goes, one way: OUT (seconds in MEDIA), --until U "
-                 "(seconds into the clip), --until-end, or --fill (the whole clip)"
-                 + (f"; got {' and '.join(ways)}" if ways else ""))
-    L, pace, n = clip_len(c), clip_pace(c), clip_frames(c)
-    shows = f"clip {i + 1} plays {L:.2f}s" + (f" at pace {pace:g}" if pace != 1 else "")
-    if a.fill and a.at:
-        sys.exit("cover: --fill covers the whole clip from 0; to start later use --at T --until-end")
-    start = float(a.at or 0)
-    f0 = reel_frame(start)
-    if start < 0 or n - f0 < COVER_FRAMES:
-        sys.exit(f"cover: --at is seconds into the clip as it plays: 0–{down((n - COVER_FRAMES) / FPS):.2f}s ({shows})")
-    if not 0 <= pin <= dur - COVER_MIN:
-        sys.exit(f"cover: IN {pin:g}s is outside {name} (it is {dur:.2f}s long)")
-    end = start + pout - pin if pout is not None else a.until
-    if end is not None and reel_frame(end) - f0 < COVER_FRAMES:
-        sys.exit(f"cover: a piece covers at least {COVER_FRAMES} frames ({COVER_MIN:g}s); "
-                 f"{start:.3f}–{end:.3f}s is {max(0, reel_frame(end) - f0)}. Nothing was laid")
-    if end is not None and end > L + 1e-3:
-        sys.exit(f"cover: {start:.2f}–{end:.2f}s runs {end - L:.2f}s past the clip's end ({shows}). "
-                 f"Cover to {down(L):.2f}s at most: OUT {down(pin + L - start):.2f}, --until {down(L):.2f} "
-                 "or --until-end. Nothing was laid")
-    fe = n if end is None else reel_frame(end)
-    t0 = pin + max(0.0, f0 / FPS - start)            # its footage at the first frame it covers
-    have = math.floor((dur - t0) * FPS + 1e-6)       # whole frames of footage from there
-    if have < fe - f0:
-        lead = max(0.0, f0 / FPS - start)
-        tips = ([f"start earlier in it (IN {down(dur - (fe - f0) / FPS - lead):.2f} or less)"]
-                if down(dur - (fe - f0) / FPS - lead) >= 0 else [])
-        u = down((f0 + have) / FPS)
-        if reel_frame(u) - f0 >= COVER_FRAMES:
-            tips += [f"cover less of the clip (--until {u:.2f})", f"lay another piece after it (--at {u:.2f})"]
-        tips = tips or [f"other footage at least {(fe - f0) / FPS:.2f}s long"]
-        sys.exit(f"cover: {name} is too short. Covering {f0 / FPS:.2f}–{fe / FPS:.2f}s of clip {i + 1} "
-                 f"({fe - f0} frames on screen) from {pin:.2f}s needs {name} to run to "
-                 f"{t0 + (fe - f0) / FPS:.2f}s; it is {dur:.2f}s long ({fe - f0 - max(0, have)} frames short). "
-                 "Nothing was laid. Try: " + "; ".join(tips))
-    at = cover_r3(c["in"] + start * pace)
-    piece = {"media": mid, "in": cover_r3(pin), "at": at,
-             "out": cover_r3(pin + ((end - start) * pace if end is not None else c["out"] - at)),
-             **({"fit": a.fit} if a.fit else {}), **({"to_end": True} if end is None else {})}
-    cover = cover_add(c, piece)
-    _, info = cover_plan({**c, "cover": cover}, st["media"])
-    x = next(x for x in info if x["piece"] is piece)
-    if x["short"] or not x["shown"]:                 # the plan is the judge: never lay a stub
-        sys.exit(f"cover: refused, it would not show as asked: {cover_short_text(x, name)}. Nothing was laid")
+    r = lay_cover(st["media"], c, mid, pin, pout, a.at, a.until, a.until_end, a.fill, a.fit)
+    if "error" in r:
+        tips = "; ".join(t for t, _ in r["tips"])
+        sys.exit(f"cover: {r['error']}. Nothing was laid." + (f" Works instead: {tips}" if tips else ""))
+    x, pace = r["x"], clip_pace(c)
     at0 = sum(clip_frames(y) for y in clips[:i]) / FPS
     s0, s1 = x["shown"]
     print(f"cover: clip {i + 1} {c['id']}" + (f" (pace {pace:g})" if pace != 1 else "") +
           f": {cover_line(x, c, st['media'], at0)}; under it, the clip's sound "
           f"{c['in'] + s0 / FPS * pace:.2f}–{c['in'] + s1 / FPS * pace:.2f}s of "
           f"{st['media'].get(c['media'], {}).get('name', c['media'])}", file=sys.stderr)
-    return cover
+    return r["cover"]
 
 def cover_warnings(before, after, lib, split=False):
     """What an edit did to the story's b-roll, as warnings: a piece it cut (it shows less than
@@ -4439,6 +4501,9 @@ def cover_warnings(before, after, lib, split=False):
             if x["short"] and not (o and o["short"]):
                 out.append(f"{tag} {cover_short_text(x, name)}. check fails \"cover short\" until it's "
                            f"laid again or removed (timeline uncover P {c['id']} {x['n']})")
+            elif o and not split and frames(x) == 0 < frames(o):
+                out.append(f"{tag} now shows nothing: the clip no longer has the words it was laid over "
+                           "(it is kept: trim back and it shows again; timeline uncover to remove it)")
             elif o and not split and frames(x) < frames(o):
                 out.append(f"{tag} now shows {frames(x) / FPS:.2f}s of the {frames(o) / FPS:.2f}s it showed "
                            "(the clip no longer has all the words it was laid over)")

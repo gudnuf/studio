@@ -341,3 +341,4 @@ try:
 finally:
     c.close(); srv.terminate()
 print("\n%d/%d passed" % (sum(ok for _, ok, _ in results), len(results)))
+sys.exit(0 if results and all(ok for _, ok, _ in results) else 1)   # a FAIL fails the run

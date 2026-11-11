@@ -32,7 +32,9 @@ export async function putTimeline(slug, tl, base) {
   if (r.status === 409 && data?.conflict) { const e = new Error('stale'); e.conflict = data; throw e; }
   if (!r.ok || data?.error) throw new Error(data?.error || `PUT timeline → ${r.status}`);
   const rev = r.headers.get('X-Timeline-Rev');
-  return { timeline: data, rev: rev != null ? +rev : null };
+  let warnings = [];   // what the save did to the b-roll (cut into, dropped, now short)
+  try { warnings = JSON.parse(r.headers.get('X-Cover-Warnings') || '[]'); } catch { /* none */ }
+  return { timeline: data, rev: rev != null ? +rev : null, warnings };
 }
 export const newProject = (name, brand) => req('POST', '/api/projects', { name, brand });
 /** Share project…: write a bundle of these projects to `out` (a new folder), in the background. */

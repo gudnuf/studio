@@ -335,13 +335,17 @@ construction (not measured).
   part; a tighten, or the UI's "Cut this out", keeps each piece over its words and plays its
   footage on unbroken across the cut (a piece laid inside the removed stretch is dropped, with
   a warning). An edit that cuts into a piece or leaves the clip without a piece's words says
-  so. A piece whose footage runs out before the end it was laid to (a `--until-end` piece on a
+  so (in the CLI, and as a toast in the UI); a piece outside the clip is kept, showing nothing,
+  and comes back when a trim brings its words back. A piece whose footage runs out before the end it was laid to (a `--until-end` piece on a
   clip trimmed longer, a slower pace) warns at the edit and fails **`cover short`** in `check`.
 - **Rendering cover.** What a clip shows is computed once, in whole export frames
   (`cover_plan`): render, the cut list, `check`, `timeline show` and the edit warnings all read
   it, so what check measures is what renders. A piece never asks for a frame of footage its file
   doesn't have (it stops there and the clip's own picture comes back), never shows footage before
-  its `in`, and is never drawn under 3 frames. Render builds the picture stretch by stretch (each
+  its `in`, and is never drawn under 3 frames (one rule for `timeline cover` and every save, so
+  a piece laid is never dropped when it is saved). A piece laid from the clip's start covers
+  its first frame. `test/cover_parity.py` (in `run_all.sh`) holds the UI's copy of the split
+  and cut rule to studio.py's on 4,000 seeded cases. Render builds the picture stretch by stretch (each
   fitted to the frame like any clip, the sound's captions burned across all of them), joins it
   and lays the clip's own sound under it in one piece, so cover never changes what's heard.
   `render.done` carries a cut list (`cuts`: `sound` or `picture`); `check` judges only sound cuts

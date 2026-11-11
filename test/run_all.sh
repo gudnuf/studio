@@ -3,7 +3,7 @@
 # -> benchmark.
 # Exits nonzero on any failure.
 #
-#   test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|ui|webkit|app|rust|bench]
+#   test/run_all.sh [--no-bench] [--no-ui] [--strict] [--only cli|server|parity|ui|webkit|app|rust|bench]
 #
 #   ui      the operator path in headless Chrome
 #   webkit  the same core path in Safari (safaridriver; skipped until `sudo safaridriver --enable`)
@@ -72,6 +72,7 @@ run fixtures bash "$here/fixtures.sh" "$STUDIO_FIXTURES"
 if [[ ${names[0]:-} == fixtures && ${results[0]} -ne 0 ]]; then echo "fixtures failed; stopping" >&2; exit 1; fi
 run cli    python3 "$here/test_cli.py" -v
 run server python3 "$here/test_server.py" -v
+run parity python3 "$here/cover_parity.py"
 if [[ $ui == 1 && -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
   run ui python3 "$here/ui_smoke.py"
 fi
@@ -98,6 +99,8 @@ for i in "${!names[@]}"; do
   elif [[ $n == ui || $n == webkit || $n == app ]]; then
     detail=$(grep -E "^SKIP" "$logs/$n.log" | head -1 | cut -c1-90)
     detail="$detail$(grep -E "^[0-9]+/[0-9]+ passed" "$logs/$n.log"; grep -E "^FAIL " "$logs/$n.log" | cut -c1-80 | tr '\n' ';')"
+  elif [[ $n == parity ]]; then
+    detail=$(grep -E "^cover parity:|^SKIP" "$logs/$n.log" | head -1)
   elif [[ $n == rust ]]; then
     detail=$(awk '/^test result:/ {p+=$4; f+=$6} END {printf "%d passed, %d failed", p, f}' "$logs/$n.log")
     grep -qE "^error(\[|:)" "$logs/$n.log" && detail="$detail  [errors: see log]"

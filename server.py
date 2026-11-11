@@ -360,15 +360,22 @@ class H(BaseHTTPRequestHandler):
             # (a client that never saw a save): it can only write a story nobody has saved yet.
             # The check runs inside timeline_save's file lock, so a CLI save can't slip between.
             try:
-                tl = S.timeline_save(slug, body, actor="operator",
+                st0 = S.state()
+                was = (st0["projects"].get(slug) or {}).get("timeline") or {"clips": []}
+                probs = []
+                tl = S.timeline_save(slug, body, actor="operator", problems=probs,
                                      base=int(base) if base is not None and base.isdigit() else 0)
+                # what the save did to b-roll, for the UI to say (the CLI prints the same lines)
+                said = [m for k, m in probs if k == "cover"] + \
+                    S.cover_warnings(S.normalize_timeline(was, st0["media"]), tl, st0["media"])
             except S.StaleRev:
                 pj = S.state()["projects"].get(slug) or {}
                 return self.send_json({"error": "stale", "conflict": True, "rev": pj.get("rev", 0),
                                        "actor": pj.get("rev_actor"),
                                        "timeline": pj.get("timeline")}, 409)
             rev = (S.state()["projects"].get(slug) or {}).get("rev", 0)
-        self.send_json(tl, headers={"X-Timeline-Rev": str(rev)})
+        self.send_json(tl, headers={"X-Timeline-Rev": str(rev),
+                                    **({"X-Cover-Warnings": json.dumps(said)} if said else {})})
 
     def do_POST(self):
         self._body_read = False

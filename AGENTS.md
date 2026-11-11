@@ -153,7 +153,10 @@ A piece is laid over the clip's words, and stays over them: trim, snap or pace t
 it keeps covering the same words (it moves on screen with them). A split gives each side its
 part; a tighten or a cut keeps each piece over its words and plays its footage on unbroken
 across the cut (a piece laid inside a removed pause is dropped, and the edit says so). An edit
-that cuts into a piece, or removes one the clip no longer has, says so. If a piece's footage
+that cuts into a piece, or leaves the clip without its words, says so; such a piece is kept
+(it shows nothing) and comes back when a trim brings its words back. A piece laid from the
+clip's start covers its first frame, even after a snap moves the in point a frame or two.
+Every number a refusal suggests works as printed. If a piece's footage
 runs out before the end it was laid to (a `--until-end` piece on a clip trimmed longer, a slower
 pace), the edit warns and `check` fails `cover short`: the clip's own picture would show where
 b-roll was meant. Lay it again with footage that lasts, cover less, or uncover.

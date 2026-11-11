@@ -109,7 +109,9 @@ writes one `bundle.imported` of its own.
   clip's `in`) for `out − in` of them, or to the clip's `out` when `to_end` is true (new
   2026-11-10, optional: additive; `out` is then what it covered when laid). Its footage plays at
   normal speed from `in`, so source second x shows footage `in + (x − at) / pace`. Pieces don't
-  overlap (normalize lays them in stored order, a later one cutting what it lands on). Because
+  overlap (normalize lays them in stored order, a later one cutting what it lands on; a piece
+  laid over fewer than 3 frames is dropped; one outside the clip's in–out is kept, showing
+  nothing until a trim brings its words back; normalizing twice changes nothing). Because
   the anchor is the words, a trim, snap or pace never moves a piece; a split or cut gives each
   side its part (studio.py `cover_cut`, ui/ops.js `coverCut`: the right side's `at` moves to the
   cut and its `in` to the footage reached there). What shows is computed in whole frames by
