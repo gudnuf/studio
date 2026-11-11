@@ -184,7 +184,6 @@ studio timeline cover P CLIP --with MEDIA IN OUT [--at T] [--fit fill|fit]
 studio timeline cover P CLIP --with MEDIA IN --until U | --until-end | --fill
                                   # ...to U seconds into the clip, to its end, or all of it
 studio timeline uncover P CLIP [N|all]   # take cover piece N (as `show` lists them) or all off
-studio migrate covers [--dry-run]        # once: stories saved before 2026-11-10 to reel-time cover
 studio timeline voice P CLIP|all natural|off   # the voice treatment (all = the story's default)
 studio timeline pace P CLIP|all X        # play 1.0-1.2x as fast, pitch kept (1 = as said)
 studio timeline tighten P CLIP|all [--max 0.35] [--to 0.12]   # cut long pauses down (below)
@@ -270,7 +269,7 @@ in/out point against the speech (lead-in 0.05–0.15 s, tail ≥ 0.25 s, never i
 spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 0.35 s, VAD on the
 export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
 frozen picture (`blackdetect`, `freezedetect`), every cover piece showing to the end it was
-laid to (`cover short`: a trim, a pace or short footage stopped it early), the cuts as rendered (in the same decode: the
+laid to (`cover short`: its footage runs out first), the cuts as rendered (in the same decode: the
 scene-change score with the caption band masked, mean luma and every frame's time; and the
 export's sound at each sound cut): frames that belong to neither shot (`flash`), a picture change
 near a cut that isn't in the timeline (`stray`), one-frame black or white pops (`pop`), a jump
@@ -325,29 +324,29 @@ construction (not measured).
   lands in the reel, the clip's source seconds under it, the footage it uses). It never clamps:
   a span past the clip's end, or footage too short to fill the span, is refused with the length
   it needs (on MEDIA's clock) and what would work (an earlier IN, a shorter span, a second piece
-  after it). On the timeline the clip carries `cover: [{media, in, start, end?, fit?}]` (reel
-  seconds into the clip; no `end` = to its end). Where no piece covers, the clip's own picture
-  shows; a new piece replaces what it lands on. `timeline show` prints every piece in reel time:
-  where it is in the clip and in the reel, and which seconds of its footage it shows.
-- **Cover stays put when the clip changes.** A piece is anchored to the clip's on-screen time:
-  a trim, snap or pace leaves it at the same second into the clip, and if the clip now ends
-  before the piece does, it stops there; a split gives each side the part that shows on it
-  (the right side's piece picks its footage up where the left's stops); a tighten lays it on the
-  shorter clock, starting and ending under the same words. An edit that leaves a piece stopping
-  before the end it was laid to warns, and `check` fails **`cover short`** (the clip's own
-  picture would show where b-roll was meant) until it's laid again, uncovered or excepted. A
-  piece whose footage runs out (a `--until-end` piece on a clip trimmed longer) fails it too.
-- **Rendering cover.** Render builds the picture stretch by stretch (each fitted to the frame
-  like any clip, the sound's captions burned across all of them), joins it and lays the clip's
-  own sound under it in one piece, so cover never changes what's heard. `render.done` carries a
-  cut list (`cuts`: `sound` or `picture`); `check` judges only sound cuts as speech cuts and makes
-  a review sheet for each picture cut too. The Story timeline marks covered stretches with a thin
-  orange line along the top of the clip.
-- **Old libraries.** Stories saved before 2026-11-10 kept cover on the clip's source clock
-  (`{in, out, at}`). Run `studio migrate covers` once (`--dry-run` first says what it would do):
-  it appends one `timeline.saved` per such story with the same picture in reel time, never
-  rewrites the log, and does nothing the second time. Until then the CLI and the UI refuse to
-  save or render those stories, and `check` refuses an export rendered from one (render again).
+  after it). On the timeline the clip carries `cover: [{media, in, out, at, fit?, to_end?}]`, the
+  shape the log has always had: the piece is laid over the clip's own source seconds from `at`
+  for `out − in` of them (to the clip's out point when `to_end`), its footage playing from `in`
+  at normal speed. Where no piece covers, the clip's own picture shows; a new piece replaces
+  what it lands on. `timeline show` prints every piece in reel time: where it is in the clip and
+  in the reel, and which seconds of its footage it shows.
+- **Cover stays over its words when the clip changes.** A trim, snap or pace leaves every piece
+  over the words it was laid over (it moves on screen with them); a split gives each side its
+  part; a tighten, or the UI's "Cut this out", keeps each piece over its words and plays its
+  footage on unbroken across the cut (a piece laid inside the removed stretch is dropped, with
+  a warning). An edit that cuts into a piece or leaves the clip without a piece's words says
+  so. A piece whose footage runs out before the end it was laid to (a `--until-end` piece on a
+  clip trimmed longer, a slower pace) warns at the edit and fails **`cover short`** in `check`.
+- **Rendering cover.** What a clip shows is computed once, in whole export frames
+  (`cover_plan`): render, the cut list, `check`, `timeline show` and the edit warnings all read
+  it, so what check measures is what renders. A piece never asks for a frame of footage its file
+  doesn't have (it stops there and the clip's own picture comes back), never shows footage before
+  its `in`, and is never drawn under 3 frames. Render builds the picture stretch by stretch (each
+  fitted to the frame like any clip, the sound's captions burned across all of them), joins it
+  and lays the clip's own sound under it in one piece, so cover never changes what's heard.
+  `render.done` carries a cut list (`cuts`: `sound` or `picture`); `check` judges only sound cuts
+  as speech cuts and makes a review sheet for each picture cut too. The Story timeline marks
+  covered stretches with a thin orange line along the top of the clip.
 - **Voice.** `natural` (the `VOICE_CHAINS` constant in studio.py: rumble cut, gentle denoise,
   less mud, a little presence, soft de-ess, light compression) runs on a clip's sound before
   loudness normalization. Spoken clips get it unless a clip, or the story (`voice … all`), says
@@ -355,7 +354,7 @@ construction (not measured).
 - **Pace.** `timeline pace P CLIP 1.1` plays the clip 10% faster: `atempo` on the sound (pitch
   kept), `setpts` on its own picture, clamped to 1.0–1.2. Everything measured on the export runs
   on the sped-up clock: captions, snapping's lead and tail, `check`, cut times. Cover pieces play
-  at normal speed and stay where they are in the clip's on-screen time (above).
+  at normal speed and stay over the words they were laid over (above).
 - **Tighten.** `timeline tighten P CLIP|all` splits a spoken clip at every pause inside its
   speech longer than `--max` (0.35 s) and cuts it down to `--to` (0.12 s, export seconds: 60%
   after the last word, 40% before the next), in silence only; every part gets the usual 20 ms

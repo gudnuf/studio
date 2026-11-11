@@ -24,7 +24,7 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Length | 15–35s by default; up to 60s only if every beat earns it |
 | Loudness | −14 LUFS integrated (±1), true peak ≤ −1 dBTP |
 | No black or frozen frames | none, unless excepted (a designed card: an exception with `--card`) |
-| Every cover runs to its end (`cover short`) | each b-roll piece shows to the end it was laid to: no edit since (trim, pace) and no shortage of footage stopped it early, putting the speaker back where b-roll was meant |
+| Every cover runs to its end (`cover short`) | each b-roll piece shows to the end it was laid to (in the frames the render draws): its footage never runs out first, putting the speaker back where b-roll was meant |
 | No stray frames at a cut (`flash`) | no frame that belongs to neither shot: two picture changes within 3 frames |
 | Every picture cut is in the timeline (`stray`) | no picture change within 0.5s of a cut that isn't the cut (picture from past a clip's edge, a cut off its frame) |
 | No one-frame pops (`pop`) | no single black (mean luma < 16) or white (> 239) frame |
@@ -126,5 +126,5 @@ references win; update this file.
   re-encoded; parts' sound ran longer than their picture). → renders are frame-exact and join
   losslessly; `held` is a hard rule.
 - 2026-11-10, editors (three of them): b-roll meant to cover a paced clip showed a stub of the
-  speaker instead (cover times on the source clock, footage clamped silently). → cover speaks
-  reel time, never clamps, and `cover short` fails a piece that stops before its end.
+  speaker instead (`--at` on the source clock, footage clamped silently). → cover speaks
+  reel time, never clamps, and `cover short` fails a piece whose footage stops before its end.

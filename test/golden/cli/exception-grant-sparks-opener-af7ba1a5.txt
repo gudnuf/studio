@@ -5,4 +5,4 @@ granted <new1>: picture on clip a1000002 as it is now (declares designed card). 
 (the next check passes it and lists it; if the clip changes it lapses; the operator may revoke it: studio exception revoke sparks-opener <new1>)
 --- stderr
 --- events
-{"data": {"actor": "agent", "brand": "jefe", "clip": "a1000002", "fp": "3ce80fd3c81c8490", "id": "<new1>", "kind": "card", "project": "sparks-opener", "rule": "picture", "why": "the held beat lands the line"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "exception.granted"}
+{"data": {"actor": "agent", "brand": "jefe", "clip": "a1000002", "fp": "ab1e898bd7241e2b", "id": "<new1>", "kind": "card", "project": "sparks-opener", "rule": "picture", "why": "the held beat lands the line"}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "exception.granted"}

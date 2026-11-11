@@ -149,13 +149,14 @@ trims), `--fill` the whole clip. Nothing is clamped: a span past the clip's end 
 short for the span is refused, with the length it needs and what would work; take one of those.
 `timeline show` lists every piece in reel time with the footage it shows.
 
-A piece stays where it is in the clip's on-screen time when you trim, snap or pace the clip; a
-split gives each side its part; a tighten keeps it over the same words. If an edit leaves a
-piece stopping before the end it was laid to (the clip now ends first, or the footage runs out),
-the edit warns and `check` fails `cover short`: lay it again (`--until-end`), shorten it on
-purpose, or uncover. So cover last, after pace, snap and tighten. A story saved before
-2026-11-10 has cover in the old shape; the CLI refuses it until `studio migrate covers` has run
-once (`--dry-run` says what it would change; that is the operator's call on their library).
+A piece is laid over the clip's words, and stays over them: trim, snap or pace the clip and
+it keeps covering the same words (it moves on screen with them). A split gives each side its
+part; a tighten or a cut keeps each piece over its words and plays its footage on unbroken
+across the cut (a piece laid inside a removed pause is dropped, and the edit says so). An edit
+that cuts into a piece, or removes one the clip no longer has, says so. If a piece's footage
+runs out before the end it was laid to (a `--until-end` piece on a clip trimmed longer, a slower
+pace), the edit warns and `check` fails `cover short`: the clip's own picture would show where
+b-roll was meant. Lay it again with footage that lasts, cover less, or uncover.
 
 To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more than 1.2),
 `timeline snap`, then `timeline tighten` (pauses over 0.35s inside speech down to 0.12s, cut in

@@ -1,9 +1,9 @@
 // Pure timeline operations. A timeline is {aspect, captions, clips:[{id, media, in, out, label?,
 // moment? (the moment n it was added from), fit? ('fill' | 'fit'; absent = fitDefault), pace?,
-// voice?, cover?}]}. cover = [{media, in, start, end?, fit?}]: b-roll over the clip's sound,
-// start/end in REEL seconds into the clip (after its pace; no end = to the clip's end), the
-// footage from `in` at normal speed (docs/events.md §3). A trim leaves pieces where they are in
-// the clip; a split or cut gives each side the part that shows on it (coverSplit).
+// voice?, cover?}]}. cover = [{media, in, out, at, fit?, to_end?}]: b-roll over the clip's sound,
+// laid over the clip's own source seconds (its words) from `at` for `out - in` of them (to the
+// clip's out point when to_end), the footage from `in` at normal speed (docs/events.md §3). A
+// trim or pace leaves every piece over its words; a split or cut gives each side its part.
 // Every op returns a NEW timeline (snapshots make undo trivial and cheap).
 
 import { round3 } from './util.js';
@@ -69,22 +69,37 @@ export function setLabel(tl, id, label) {
     return n;
   }));
 }
-const COVER_MIN = 0.1;
 /** How fast the clip plays (1-1.2; absent = 1). */
 export const paceOf = c => Math.min(1.2, Math.max(1, +c.pace || 1));
-/** A clip's cover split at reel second t into the clip: [left side's, right side's] (studio.py
- *  cover_split). The right side's pieces move to its clock and pick up their footage where the
- *  left's stop; a piece to the clip's end stays one on both sides. */
-export function coverSplit(cover, t) {
+/** 3 decimals, half up: the same as studio.py cover_r3 (Math.round and Python's round differ). */
+const r3 = x => Math.floor(x * 1000 + 0.5) / 1000;
+/** Python's round(): half to even (x - floor(x) is exact, so ties are found exactly). */
+const roundEven = x => { const f = Math.floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : (f % 2 ? f + 1 : f); };
+/** A clip's cover cut at source seconds s1..s2: [left side's, right side's] (a split: s1 == s2;
+ *  "Cut this out": the stretch between is removed). studio.py cover_cut, line for line: each
+ *  piece stays laid over the same words; one spanning the cut plays its footage on unbroken;
+ *  one starting inside the cut starts at s2; one entirely inside it is dropped. (studio.py also
+ *  drops a right side whose footage has run out; the server's save does that here.) */
+export function coverCut(cover, s1, s2, pace, cin) {
   const left = [], right = [];
+  const nLeft = Math.max(1, roundEven((s1 - cin) / pace * 30 + 1e-6));
   for (const p of cover || []) {
-    const e = p.end ?? null;
-    if (p.start < t && Math.min(t, e ?? t) - p.start >= COVER_MIN) left.push(e != null && e > t ? { ...p, end: round3(t) } : { ...p });
-    if (e == null || e > t) {
-      const s = Math.max(0, p.start - t);
-      const q = { ...p, in: round3(p.in + Math.max(0, t - p.start)), start: round3(s) };
-      if (e != null) q.end = round3(e - t);
-      if (e == null || q.end - s >= COVER_MIN) right.push(q);
+    const a = p.at, b = p.to_end ? Infinity : p.at + p.out - p.in;
+    if (a < s1) {
+      const q = { ...p };
+      if (b > s1 && !p.to_end) q.out = r3(p.in + s1 - a);
+      left.push(q);
+    }
+    if (b > s2) {
+      if (a >= s2) { right.push({ ...p }); continue; }
+      let fin = p.in;
+      if (a < s1) {                       // the footage reached at the left side's last frame
+        const r0 = (a - cin) / pace, f0 = Math.max(0, roundEven((a - cin) * 30 / pace));
+        fin = Math.max(p.in, p.in + f0 / 30 - r0) + (nLeft - f0) / 30;
+      }
+      const q = { ...p, in: r3(fin), at: r3(s2) };
+      if (!p.to_end) q.out = r3(fin + b - s2);
+      right.push(q);
     }
   }
   return [left, right];
@@ -95,10 +110,11 @@ function withCover(c, cover) {
   if (cover?.length) n.cover = cover; else delete n.cover;
   return n;
 }
-/** c cut at source time `at` into [left, right] (right gets id), each with its part of the cover. */
-function cutClip(c, at, id) {
-  const [lc, rc] = c.cover?.length ? coverSplit(c.cover, (at - c.in) / paceOf(c)) : [c.cover, c.cover];
-  return [withCover({ ...c, out: round3(at) }, lc), withCover({ ...c, id, in: round3(at) }, rc)];
+/** c with source s1..s2 cut out, as [left (ending at s1), right (from s2, id `id`)], each with
+ *  the cover laid over its own words. */
+function cutClip(c, s1, s2, id) {
+  const [lc, rc] = c.cover?.length ? coverCut(c.cover, s1, s2, paceOf(c), c.in) : [c.cover, c.cover];
+  return [withCover({ ...c, out: round3(s1) }, lc), withCover({ ...c, id, in: round3(s2) }, rc)];
 }
 /** Split clip at source time `at`. Returns [tl, rightId] or [tl, null] if too close to an edge. */
 export function splitAt(tl, id, at) {
@@ -106,7 +122,7 @@ export function splitAt(tl, id, at) {
   if (i < 0) return [tl, null];
   const c = tl.clips[i];
   if (at - c.in < MIN_CLIP || c.out - at < MIN_CLIP) return [tl, null];
-  const [left, right] = cutClip(c, at, newId());
+  const [left, right] = cutClip(c, at, at, newId());
   const clips = tl.clips.slice();
   clips.splice(i, 1, left, right);
   return [withClips(tl, clips), right.id];
@@ -126,9 +142,9 @@ export function cutRange(tl, id, a, b) {
   const c = tl.clips[i];
   a = Math.max(a, c.in); b = Math.min(b, c.out);
   if (b <= a) return [tl, null];
-  const pieces = [];
-  if (a - c.in >= MIN_CLIP) pieces.push(cutClip(c, a, c.id)[0]);
-  if (c.out - b >= MIN_CLIP) pieces.push(cutClip(c, b, pieces.length ? newId() : c.id)[1]);
+  const pieces = [], [left, right] = cutClip(c, a, b, c.id);
+  if (a - c.in >= MIN_CLIP) pieces.push(left);
+  if (c.out - b >= MIN_CLIP) pieces.push(pieces.length ? { ...right, id: newId() } : right);
   const clips = tl.clips.slice();
   clips.splice(i, 1, ...pieces);
   return [withClips(tl, clips), pieces[0]?.id || pieces[1]?.id || null];

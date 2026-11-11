@@ -367,8 +367,6 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "stale", "conflict": True, "rev": pj.get("rev", 0),
                                        "actor": pj.get("rev_actor"),
                                        "timeline": pj.get("timeline")}, 409)
-            except S.LegacyCover as e:   # a story from before reel-time cover: migrate first
-                return self.send_json({"error": str(e)}, 422)
             rev = (S.state()["projects"].get(slug) or {}).get("rev", 0)
         self.send_json(tl, headers={"X-Timeline-Rev": str(rev)})
 

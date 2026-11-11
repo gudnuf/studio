@@ -223,11 +223,6 @@ try:
     mo = {m["n"]: m for m in ST["media"][sw]["moments"]}
     J = "const st = await import('/ui/store.js'), ops = await import('/ui/ops.js');"
 
-    # cover: the UI splits a covered clip the way the CLI does (reel time, docs/events.md §3)
-    cov = [{"media": sr, "in": 1.0, "start": 0.5, "end": 2.5}, {"media": sr, "in": 4.0, "start": 3.0}]
-    js_split = c.js(f"(async () => {{ {J} return [1.0, 2.75, 3.5].map(t => ops.coverSplit({json.dumps(cov)}, t)); }})()")
-    py_split = [list(SM.cover_split(cov, t)) for t in (1.0, 2.75, 3.5)]
-    check("the UI splits a cover like the CLI (reel time)", js_split == py_split, (js_split, py_split))
 
     # Q3 + Q7: a clip added from moment 2 (the real "+ Add to story" button), then trimmed so it
     # overlaps moment 1 more than moment 2
@@ -326,6 +321,16 @@ try:
     check("first save of a new project carries ?base=0", r.returncode == 0 and puts and "base=0" in puts[0], puts)
     check("...gets the 409, merges, and keeps the agent's clip and mine", sorted(x["media"] for x in fin) == sorted([sw, sr]), fin)
     check("...and says so", "Both changes are kept" in tt, tt)
+
+    # cover: the UI's split and "Cut this out" move b-roll the way the CLI's split and tighten do
+    # (studio.py cover_cut; docs/events.md §3), on vectors with paced, spanning, inside-the-cut
+    # and to-the-end pieces
+    cov = [{"media": sr, "in": 1.0, "out": 3.2, "at": 10.5}, {"media": sr, "in": 4.0, "out": 4.6, "at": 12.6},
+           {"media": sr, "in": 0.5, "out": 1.0, "at": 13.1, "to_end": True}]
+    cuts = [(11.0, 11.0, 1.1), (11.0, 12.7, 1.1), (12.5, 13.5, 1.2), (12.55, 12.55, 1.0), (10.6, 10.6005, 1.17)]
+    js_cut = c.js(f"(async () => {{ {J} return {json.dumps(cuts)}.map(([a, b, p]) => ops.coverCut({json.dumps(cov)}, a, b, p, 10.0)); }})()")
+    py_cut = [list(SM.cover_cut(cov, a_, b_, p_, 10.0)[:2]) for a_, b_, p_ in cuts]
+    check("the UI cuts a cover like the CLI (split, cut out, tighten)", js_cut == py_cut, (js_cut, py_cut))
 
     body = c.js("document.body.innerText")
     check("no stray 'null' anywhere", "null" not in body.replace("nullable", ""), [l for l in body.splitlines() if "null" in l][:5])

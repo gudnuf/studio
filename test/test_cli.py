@@ -1693,7 +1693,7 @@ class Cover(unittest.TestCase):
         clip = self.tl(covered)["clips"][0]
         H.cli(self.home, "timeline", "cover", covered, clip["id"], "--with", self.scr, 1.0, 4.0, "--at", 2.0)
         c = self.tl(covered)["clips"][0]
-        self.assertEqual(c["cover"], [{"media": self.scr, "in": 1.0, "start": 2.0, "end": 5.0}])
+        self.assertEqual(c["cover"], [{"media": self.scr, "in": 1.0, "out": 4.0, "at": round(clip["in"] + 2.0, 3)}])
         self.assertIn("cover 1: 2.00–5.00s of the clip (2.00–5.00s in the reel) shows screen-recording.mp4 1.00–4.00s",
                       H.cli(self.home, "timeline", "show", covered).stdout)
         fp, ev = self.render(covered)
@@ -1741,16 +1741,16 @@ class Cover(unittest.TestCase):
         cov = self.tl(slug)["clips"][0]["cover"]
         a = self.tl(slug)["clips"][0]["in"]
         # the new piece cuts a hole in the one it lands on: 1-2 old, 2-3 new, 3-4 old (going on)
-        self.assertEqual([(p["in"], p["start"], p["end"]) for p in cov],
-                         [(1.0, 1.0, 2.0), (6.0, 2.0, 3.0), (3.0, 3.0, 4.0)])
+        self.assertEqual([(p["in"], p["out"], round(p["at"] - a, 3)) for p in cov],
+                         [(1.0, 2.0, 1.0), (6.0, 7.0, 2.0), (3.0, 4.0, 3.0)])
         # stale base refused like every other edit
         r = H.cli(self.home, "timeline", "uncover", slug, cid, "1", "--base", rev0, check=False)
         self.assertEqual(r.returncode, 3)
-        # a split gives each side the part of the cover that shows on it, on its own clock
+        # a split gives each side the cover over its own words
         H.cli(self.home, "timeline", "split", slug, cid, 2.5)
         left, right = self.tl(slug)["clips"]
-        self.assertEqual([(p["in"], p["start"], p["end"]) for p in left["cover"]], [(1.0, 1.0, 2.0), (6.0, 2.0, 2.5)])
-        self.assertEqual([(p["in"], p["start"], p["end"]) for p in right["cover"]], [(6.5, 0.0, 0.5), (3.0, 0.5, 1.5)])
+        self.assertEqual([(p["in"], p["out"]) for p in left["cover"]], [(1.0, 2.0), (6.0, 6.5)])
+        self.assertEqual([(p["in"], p["out"]) for p in right["cover"]], [(6.5, 7.0), (3.0, 4.0)])
         H.cli(self.home, "timeline", "uncover", slug, right["id"], "2")
         self.assertEqual(len(self.tl(slug)["clips"][1]["cover"]), 1)
         H.cli(self.home, "timeline", "uncover", slug, left["id"])
@@ -1769,45 +1769,29 @@ class Cover(unittest.TestCase):
         self.assertEqual(self.S.normalize_timeline(old, lib), old, "no new keys appear")
         c = old["clips"][0]
         self.assertEqual(self.S.cut_list(old, lib), [])
-        self.assertEqual(self.S.cover_spans(c), [(0.0, 3.4, None)])
+        self.assertEqual(self.S.cover_plan(c, lib)[0], [(0, 102, None, 0.7)])
         # no voice, no pace: the fades, and exactly the clip's frames of sound (102 frames x 1600)
         self.assertEqual(self.S.sound_filter(102, "off"),
                          "asetpts=PTS-STARTPTS,aresample=48000,afade=t=in:d=0.020,"
                          "afade=t=out:st=3.3800:d=0.020,apad,atrim=end_sample=163200")
         # a cover piece pointing at missing footage is dropped with a warning, never the clip
         probs = []
-        tl = self.S.normalize_timeline({**old, "clips": [{**c, "cover": [{"media": "nope", "in": 0, "start": 1, "end": 2}]}]},
+        tl = self.S.normalize_timeline({**old, "clips": [{**c, "cover": [{"media": "nope", "in": 0, "out": 1, "at": 1}]}]},
                                        lib, probs)
         self.assertNotIn("cover", tl["clips"][0])
         self.assertEqual([k for k, _ in probs], ["cover"])
-        # an old-shape piece (source clock, `at`) is never read as a new one: migrate first
-        with self.assertRaises(self.S.LegacyCover):
-            self.S.normalize_timeline({**old, "clips": [{**c, "cover": [{"media": self.r, "in": 0, "out": 1, "at": 1}]}]}, lib)
-
-    def test_cover_spans_fold_a_sliver_at_the_start(self):
-        """A cover starting a frame or two into the clip: the sliver of the clip's own picture
-        before it is folded into the cover (it used to crash with two stretches, and with three
-        it stretched the last one back to 0)."""
-        p = {"media": self.r, "in": 0.0, "start": 0.05, "end": 1.05}
-        two = self.S.cover_spans({"id": "x", "media": self.b, "in": 0.0, "out": 1.05, "cover": [p]})
-        self.assertEqual([(a, x is not None) for a, _, x in two], [(0.0, True)])
-        self.assertEqual(two[0][1], 1.05)
-        three = self.S.cover_spans({"id": "x", "media": self.b, "in": 0.0, "out": 3.4, "cover": [p]})
-        self.assertEqual([x is not None for _, _, x in three], [True, False])
-        self.assertEqual(three[0][0], 0.0)
-        self.assertEqual(three[0][1], three[1][0], "end to end")
-        self.assertEqual(three[1][1], 3.4)
 
     def test_cover_speaks_reel_time_on_a_paced_clip(self):
         """--at and the span are seconds into the clip as it plays: on a clip at pace 1.1 the
         b-roll lands where asked in the export with no conversion by hand, and the command says
-        the converted numbers back."""
+        the converted numbers back. Stored, it is laid over the clip's source seconds."""
         paced = self.project("Paced cover", captions="off")
         roll = self.project("Paced roll", 1.0, 4.0, captions="off", media=self.scr, snap=False)
         H.cli(self.home, "timeline", "pace", paced, "1", "1.1")
         c = self.tl(paced)["clips"][0]
         r = H.cli(self.home, "timeline", "cover", paced, c["id"], "--with", self.scr, 1.0, 4.0, "--at", 2.0)
-        self.assertEqual(self.tl(paced)["clips"][0]["cover"], [{"media": self.scr, "in": 1.0, "start": 2.0, "end": 5.0}])
+        self.assertEqual(self.tl(paced)["clips"][0]["cover"],
+                         [{"media": self.scr, "in": 1.0, "out": 4.3, "at": round(c["in"] + 2.2, 3)}])
         self.assertIn("(pace 1.1): 2.00–5.00s of the clip (2.00–5.00s in the reel) shows "
                       "screen-recording.mp4 1.00–4.00s", r.stderr)
         self.assertIn(f"the clip's sound {c['in'] + 2.2:.2f}–{c['in'] + 5.5:.2f}s of bursts.mov", r.stderr)
@@ -1816,109 +1800,123 @@ class Cover(unittest.TestCase):
         self.assertEqual([(x["kind"], x["at"]) for x in ev["cuts"]], [("picture", 2.0), ("picture", 5.0)])
         for t in (2.3, 3.5, 4.7):     # the b-roll's own second t - 2 (it plays at normal speed)
             self.assertLess(self.diff(self.frame(fp, t), self.frame(fr, t - 2.0)), 4, f"b-roll at {t}")
-        # --fill covers the whole clip, --until-end from T: both to the clip's end (no `end`)
+        # --fill covers the whole clip, --until-end from T: both to the clip's end, whatever it becomes
         H.cli(self.home, "timeline", "cover", paced, c["id"], "--with", self.scr, 0.0, "--fill")
-        self.assertEqual(self.tl(paced)["clips"][0]["cover"], [{"media": self.scr, "in": 0.0, "start": 0.0}])
         H.cli(self.home, "timeline", "cover", paced, c["id"], "--with", self.r, 1.0, "--at", 1.5, "--until-end")
         H.cli(self.home, "timeline", "cover", paced, c["id"], "--with", self.r, 4.0, "--at", 0.5, "--until", 1.0)
-        self.assertEqual(self.tl(paced)["clips"][0]["cover"],
-                         [{"media": self.scr, "in": 0.0, "start": 0.0, "end": 0.5},
-                          {"media": self.r, "in": 4.0, "start": 0.5, "end": 1.0},
-                          {"media": self.scr, "in": 1.0, "start": 1.0, "end": 1.5},
-                          {"media": self.r, "in": 1.0, "start": 1.5}])
         show = H.cli(self.home, "timeline", "show", paced).stdout
-        self.assertIn(f"cover 4: 1.50–{self.S.clip_len(c):.2f}s of the clip, to its end", show)
+        L = self.S.clip_frames(c) / 30
+        for want in ("cover 1: 0.00–0.50s of the clip (0.00–0.50s in the reel) shows screen-recording.mp4 0.00–0.50s",
+                     "cover 2: 0.50–1.00s of the clip (0.50–1.00s in the reel) shows broll-roomtone.mov 4.00–4.50s",
+                     "cover 3: 1.00–1.50s of the clip (1.00–1.50s in the reel) shows screen-recording.mp4 1.00–1.50s",
+                     f"cover 4: 1.50–{L:.2f}s of the clip, to its end"):
+            self.assertIn(want, show)
         self.assertNotIn("SHORT", show)
 
-    def test_cover_never_clamps_short_footage(self):
-        """Footage that can't fill the span, or a span past the clip's end, is refused with the
-        length it needs and what would work; nothing is saved."""
-        slug = self.project("Short footage", captions="off")      # ~7.9 s; the b-roll is 8.0 s
+    def test_cover_refuses_what_it_cant_do_and_its_tips_work(self):
+        """Footage that can't fill the span, a span past the clip's end, a piece under 3 frames or
+        a number that isn't one are refused, nothing saved; every number a refusal suggests then
+        works as printed."""
+        import re
+        slug = self.project("Refusals", captions="off")             # ~7.9 s; the b-roll is 8.0 s
         c = self.tl(slug)["clips"][0]
         rev = self.S.state()["projects"][slug]["rev"]
-        L, dur = self.S.clip_len(c), self.S.state()["media"][self.r]["duration"]
-        r = H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 2.0, "--fill", check=False)
+        cover = lambda *a, check=False: H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, *a,
+                                              check=check)
+        r = cover(2.0, "--fill")
         self.assertEqual(r.returncode, 1, r.stderr)
-        for want in ("broll-roomtone.mov is too short", f"needs broll-roomtone.mov to run to {2.0 + L:.2f}s",
-                     f"it is {dur:.2f}s long", "Nothing was laid", f"IN {dur - L:.2f} or less",
-                     f"--until {dur - 2.0:.2f}", f"--at {dur - 2.0:.2f}"):
+        for want in ("broll-roomtone.mov is too short", "frames short", "Nothing was laid", "IN ", "--until ", "--at "):
             self.assertIn(want, r.stderr)
-        r = H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 7.0, 9.0, check=False)
+        tip_in = re.search(r"IN (\d+\.\d\d) or less", r.stderr).group(1)
+        tip_until = re.search(r"--until (\d+\.\d\d)", r.stderr).group(1)
+        self.assertEqual(cover(7.0, 9.0).returncode, 1)
+        r = cover(0.0, 6.0, "--at", 3.0)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("needs broll-roomtone.mov to run to 9.00s", r.stderr)
-        r = H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 0.0, 6.0, "--at", 3.0, check=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn(f"runs {9.0 - L:.2f}s past the clip's end", r.stderr)
-        self.assertIn(f"OUT {L - 3.0:.2f}, --until {L:.2f} or --until-end", r.stderr)
-        r = H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 0.0, 2.0, "--fill", check=False)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("one way", r.stderr)
+        self.assertIn("past the clip's end", r.stderr)
+        tip_out = re.search(r"OUT (\d+\.\d\d)", r.stderr).group(1)
+        self.assertEqual(cover(0.0, 2.0, "--fill").returncode, 1, "one way to say how far")
+        self.assertIn("2. Nothing was laid", cover(1.0, 1.06, "--at", 0.2).stderr, "two frames: refused")
+        for bad in (("1.0", "--until", "nan"), ("1.0", "nan"), ("1.0", "2.0", "--at", "inf"), ("nan", "--fill")):
+            r = cover(*bad)
+            self.assertEqual(r.returncode, 1, bad)
+            self.assertIn("must be a number of seconds", r.stderr)
         self.assertEqual(self.S.state()["projects"][slug]["rev"], rev, "nothing saved")
-        self.assertNotIn("cover", self.tl(slug)["clips"][0])
-        # what does fit is taken as asked
-        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, int((dur - L) * 100) / 100, "--fill")
+        # the tips, as printed
+        cover(tip_in, "--fill", check=True)
+        cover(2.0, "--until", tip_until, check=True)
+        cover(0.0, tip_out, "--at", 3.0, check=True)
+        cover(1.0, 1.1, "--at", 0.2, check=True)                   # 3 frames: laid, and it shows
+        x = next(x for x in self.S.cover_plan(self.tl(slug)["clips"][0], self.S.state()["media"])[1]
+                 if x["piece"]["in"] == 1.0 and x["piece"]["out"] == 1.1)
+        self.assertEqual(x["shown"], (6, 9))
+        # a hand-written NaN never reaches the log: dropped with a warning, and the state is JSON
+        tl = self.tl(slug)
+        tl["clips"][0]["cover"].append({"media": self.r, "in": float("nan"), "out": 1.0, "at": 1.0})
+        r = H.cli(self.home, "timeline", "set", slug, "-", input=json.dumps(tl))
+        self.assertIn("not finite numbers", r.stderr)
+        def strict(x):
+            raise ValueError(f"not JSON: {x}")
+        json.loads(H.cli(self.home, "state", "--json").stdout, parse_constant=strict)
+        json.loads((self.home / "events.jsonl").read_text().splitlines()[-1], parse_constant=strict)
 
-    def test_edits_keep_cover_anchored_and_check_fails_cover_short(self):
-        """trim, pace and split leave every piece where it is in the clip's on-screen time; an edit
-        that cuts one short warns, and check fails `cover short` (bendable) until it's fixed."""
-        slug = self.project("Anchored", captions="off")
+    def test_edits_keep_cover_under_its_words(self):
+        """A trim or snap of the in point, a pace change and a trim of the out point leave every
+        piece laid over the same source seconds (its words); a piece the clip no longer has is
+        removed with a warning, one an edit cuts into is said."""
+        slug = self.project("Anchored", 0.5, 8.4, captions="off", snap=False)
         c = self.tl(slug)["clips"][0]
-        a0, b0 = c["in"], c["out"]
-        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 1.0, 3.0, "--at", 2.0)
-        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.scr, 0.0, "--at", 5.0, "--until-end")
-        shape = lambda: [(p["media"], p["in"], p["start"], p.get("end")) for p in self.tl(slug)["clips"][0]["cover"]]
-        want = [(self.r, 1.0, 2.0, 4.0), (self.scr, 0.0, 5.0, None)]
-        # a trim of the in point: the pieces stay at the same seconds into the clip
-        r = H.cli(self.home, "timeline", "trim", slug, c["id"], a0 + 0.4, b0)
-        self.assertEqual(shape(), want)
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 1.0, 3.0, "--at", 2.0)   # source 2.5-4.5
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.scr, 0.0, "--at", 6.0, "--until-end")
+        stored = lambda: self.tl(slug)["clips"][0]["cover"]
+        laid = stored()
+        reel = lambda: [x["shown"] for x in self.S.cover_plan(self.tl(slug)["clips"][0], self.S.state()["media"])[1]]
+        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 1.0, 8.4)           # in point 0.5 later
+        self.assertEqual(stored(), laid)
+        self.assertEqual(reel()[0], (45, 105), "the same words: 0.5 s earlier into the clip")
         self.assertNotIn("warning", r.stderr)
-        # pace: the same; the piece to the end follows the end
-        r = H.cli(self.home, "timeline", "pace", slug, c["id"], "1.2")
-        self.assertEqual(shape(), want)
-        self.assertNotIn("warning", r.stderr)
-        self.assertIn(f"5.00–{self.S.clip_len(self.tl(slug)['clips'][0]):.2f}s of the clip, to its end",
-                      H.cli(self.home, "timeline", "show", slug).stdout)
-        # a split (AT in source seconds, 3.0 s of reel time at pace 1.2): each side its part,
-        # the right side's footage picking up where the left side's stops
-        H.cli(self.home, "timeline", "split", slug, c["id"], 3.6)
-        left, right = self.tl(slug)["clips"]
-        self.assertEqual([(p["in"], p["start"], p.get("end")) for p in left["cover"]], [(1.0, 2.0, 3.0)])
-        self.assertEqual([(p["in"], p["start"], p.get("end")) for p in right["cover"]], [(2.0, 0.0, 1.0), (0.0, 2.0, None)])
-        H.cli(self.home, "timeline", "rm", slug, right["id"])
-        # a trim that ends the clip before a piece does: warned, shown, and check fails it
-        r = H.cli(self.home, "timeline", "trim", slug, left["id"], left["in"], round(left["in"] + 2.5 * 1.2, 3))
-        self.assertIn(f"warning: clip 1 {left['id']}: cover 1 now stops at 2.50s, laid to 3.00s: the clip ends there",
-                      r.stderr)
-        self.assertIn('check fails "cover short"', r.stderr)
-        self.assertIn("SHORT: stops at 2.50s, laid to 3.00s", H.cli(self.home, "timeline", "show", slug).stdout)
-        self.render(slug)
-        res, rules = self.check(slug)
-        self.assertEqual(rules["cover short"]["status"], "fail", rules["cover short"])
-        self.assertIn("clip 1 cover 1 (from 2.00s): stops at 2.50s", rules["cover short"]["items"][0])
-        self.assertIn("cover short", res["failed"])
-        # bendable, like the other judgment calls, by its name or with a hyphen
-        H.cli(self.home, "exception", "grant", slug, "cover-short", left["id"], "--why", "the face is back for the last word on purpose")
-        _, rules = self.check(slug)
-        self.assertEqual(rules["cover short"]["status"], "excepted", rules["cover short"])
-        # laid again to the end: fixed
-        H.cli(self.home, "timeline", "uncover", slug, left["id"])
-        H.cli(self.home, "timeline", "cover", slug, left["id"], "--with", self.r, 1.0, "--at", 2.0, "--until-end")
-        self.assertEqual(self.S.cover_short(self.tl(slug)["clips"][0], self.S.state()["media"]), [])
+        r = H.cli(self.home, "timeline", "snap", slug, c["id"])                     # the in point moves again
+        self.assertEqual(stored(), laid)
+        H.cli(self.home, "timeline", "pace", slug, c["id"], "1.2")
+        self.assertEqual(stored(), laid, "pace: the same words, played faster")
+        cc = self.tl(slug)["clips"][0]
+        self.assertEqual(reel()[0][0], self.S.reel_frame((2.5 - cc["in"]) / 1.2))
+        # the out point cuts into the first piece: said; past the second: removed, said
+        H.cli(self.home, "timeline", "pace", slug, c["id"], "1")
+        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 1.0, 4.0)
+        self.assertIn("cover 1 now shows 1.50s of the 2.00s it showed", r.stderr)
+        self.assertIn("cover 2 dropped: laid outside the clip", r.stderr)
+        self.assertEqual(len(stored()), 1)
+        # the in point into the piece, then past it: said, then removed
+        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 3.5, 6.0)
+        self.assertIn("cover 1 now shows 1.00s of the 1.50s it showed", r.stderr)
+        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 4.6, 6.0)
+        self.assertIn("cover 1 dropped: laid outside the clip", r.stderr)
+        self.assertNotIn("cover", self.tl(slug)["clips"][0])
 
-    def test_a_piece_to_the_end_fails_when_its_footage_runs_out(self):
-        """--until-end follows the clip's end; trimmed longer than the footage can cover, it stops
-        where the footage does: a warning, and cover short."""
+    def test_cover_short_when_footage_runs_out(self):
+        """A piece to the clip's end follows a trim that lengthens the clip; when its footage runs
+        out first the edit warns, the clip's own picture comes back on the frame it ends (never
+        a held frame), and check fails `cover short` (bendable) by the same frames."""
         slug = self.project("Runs out", 0.5, 4.0, captions="off", snap=False)
         c = self.tl(slug)["clips"][0]
-        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 4.0, "--fill")   # 3.5 s of 8
-        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 0.5, 12.0)                     # 11.5 s
-        self.assertIn("laid to the clip's end: its footage ends (broll-roomtone.mov is", r.stderr)
+        H.cli(self.home, "timeline", "cover", slug, c["id"], "--with", self.r, 4.0, "--fill")    # 3.5 s of 8
+        r = H.cli(self.home, "timeline", "trim", slug, c["id"], 0.5, 12.0)                      # 11.5 s
+        self.assertIn("its footage ends (broll-roomtone.mov is", r.stderr)
+        self.assertIn('check fails "cover short"', r.stderr)
         dur = self.S.state()["media"][self.r]["duration"]
-        spans = self.S.cover_spans(self.tl(slug)["clips"][0], self.S.state()["media"])
-        self.assertEqual([(x is not None) for _, _, x in spans], [True, False],
-                         "the clip's own picture after the footage ends (never a frozen or missing frame)")
-        self.assertAlmostEqual(spans[0][1], dur - 4.0, delta=1 / 30)
-        self.assertEqual((spans[0][0], spans[1][1]), (0.0, 11.5))
+        spans, _ = self.S.cover_plan(self.tl(slug)["clips"][0], self.S.state()["media"])
+        have = int((dur - 4.0) * 30 + 1e-6)
+        self.assertEqual([(f0, f1, p is not None) for f0, f1, p, _ in spans], [(0, have, True), (have, 345, False)])
+        fp, ev = self.render(slug)
+        self.assertEqual([x["frame"] for x in ev["cuts"] if x["kind"] == "picture"], [have])
+        self.assertGreater(self.diff(self.frame(fp, (have - 0.5) / 30), self.frame(fp, (have - 1.5) / 30)), 0.05,
+                           "the last b-roll frames move: nothing cloned")
+        res, rules = self.check(slug)
+        self.assertEqual(rules["cover short"]["status"], "fail", rules["cover short"])
+        self.assertIn(f"stops at {have / 30:.2f}s", rules["cover short"]["items"][0])
+        H.cli(self.home, "exception", "grant", slug, "cover-short", c["id"], "--why", "the face is back for the last words on purpose")
+        _, rules = self.check(slug)
+        self.assertEqual(rules["cover short"]["status"], "excepted", rules["cover short"])
 
     def test_bundle_carries_cover_footage(self):
         slug = self.project("Bundled", captions="off")
@@ -2007,15 +2005,16 @@ class Cover(unittest.TestCase):
         H.cli(self.home, "timeline", "tighten", slug, "all")
         clips = self.tl(slug)["clips"]
         pieces = [(k, p) for k, c in enumerate(clips) for p in c.get("cover", [])]
-        # the b-roll plays on unbroken across the cut: where one piece's footage stops the next's starts
+        # the b-roll plays on unbroken across the cut: the next part's first footage frame is the
+        # one after the last the first part draws
         self.assertEqual([k for k, _ in pieces], [0, 1])
         (_, p0), (_, p1) = pieces
-        self.assertEqual((p0["start"], p0["in"]), (round(at, 2), 2.0), "starts under the same word")
-        self.assertAlmostEqual(p0["end"], self.S.clip_len(clips[0]), places=2)
-        self.assertAlmostEqual(p0["in"] + p0["end"] - p0["start"], p1["in"], places=3)
-        self.assertEqual(p1["start"], 0.0, "picks up at the start of the next piece")
-        # ... and ends under the same word it did, the pause it spanned taken out
-        self.assertAlmostEqual(clips[1]["in"] + p1["end"], c["in"] + round(at, 2) + 2.0, places=2)
+        lib = self.S.state()["media"]
+        f0, f1, _, t0 = [x for x in self.S.cover_plan(clips[0], lib)[0] if x[2]][-1]
+        self.assertAlmostEqual(t0 + (f1 - f0) / 30, self.S.cover_plan(clips[1], lib)[0][0][3], delta=0.0011)
+        self.assertEqual(p1["at"], clips[1]["in"], "picks up at the start of the next piece")
+        # ... and still ends under the word it was laid to (the pause it spanned is cut out)
+        self.assertAlmostEqual(p1["at"] + p1["out"] - p1["in"], c["in"] + round(at, 2) + 2.0, places=2)
         self.render(slug)
         _, r = self.check(slug)
         self.assertEqual(r["cover short"]["status"], "pass", r["cover short"])
@@ -2046,15 +2045,196 @@ class Cover(unittest.TestCase):
         self.assertTrue(any("atempo=1.1" in c for c in self.commands(slug)))
 
 
-class MigrateCovers(unittest.TestCase):
-    """`studio migrate covers`: stories saved with cover on the clip's source clock (`at`, before
-    2026-11-10) to reel time, on the scrubbed real log (test/golden/fold/real.events.jsonl, 24
-    old pieces on paced clips in 5 stories)."""
-    G = H.ROOT / "test" / "golden" / "fold"
+class CoverPlan(unittest.TestCase):
+    """cover_plan: the one frame plan render, the cut list, check and `timeline show` all read
+    (pure functions; the cases the cross-model reviews of 2026-11-10 found, and fuzz)."""
+    LIB = {"spk": {"duration": 60.0, "has_video": True, "name": "spk"}, "a": {"duration": 2.95, "has_video": True},
+           "b": {"duration": 9.0, "has_video": True}, "br": {"duration": 3.0, "has_video": True},
+           "m": {"duration": 2.0, "has_video": True}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = H.import_studio(H.new_home("cover-plan"))
+
+    def piece_frames(self, c, lib=None):
+        """[(media, f0, f1, t0, frames of footage the file has from t0)] of the plan's pieces."""
+        sp, _ = self.S.cover_plan(c, lib or self.LIB)
+        return [(p["media"], f0, f1, t0, int(((lib or self.LIB)[p["media"]]["duration"] - t0) * 30 + 1e-6))
+                for f0, f1, p, t0 in sp if p]
+
+    def test_a_piece_never_asks_for_footage_its_file_lacks(self):
+        # a 0.067 s gap after a piece whose footage ends exactly at its end: the speaker shows
+        # (the old fold gave the gap to the piece and asked 2 frames past the file)
+        c = {"id": "c", "media": "spk", "in": 0.0, "out": 6.0,
+             "cover": [{"media": "a", "in": 0.0, "out": 2.95, "at": 0.0}, {"media": "b", "in": 0.0, "out": 2.0, "at": 3.0}]}
+        for m, f0, f1, t0, have in self.piece_frames(c):
+            self.assertLessEqual(f1 - f0, have, m)
+        self.assertEqual(self.S.cover_short(c, self.LIB), [])
+        # footage to the clip's end 0.05 s short: check and the plan agree the speaker is back
+        c = {"id": "c", "media": "spk", "in": 10.0, "out": 10.0 + 4.0 * 1.17, "pace": 1.17,
+             "cover": [{"media": "br", "in": 0.0, "out": 4.0, "at": 10.0 + 0.95 * 1.17, "to_end": True}]}
+        sp, _ = self.S.cover_plan(c, self.LIB)
+        self.assertIsNone(sp[-1][2])
+        self.assertTrue(self.S.cover_short(c, self.LIB))
+        # a sliver before a piece never shows footage before its IN: it stays the speaker's
+        c = {"id": "c", "media": "spk", "in": 0.0, "out": 6.0, "cover": [{"media": "b", "in": 2.0, "out": 4.95, "at": 0.05}]}
+        (_, f0, f1, t0, _), = self.piece_frames(c)
+        self.assertEqual(f0, 2)
+        self.assertAlmostEqual(t0, 2.0 + 2 / 30 - 0.05, places=6)     # frame 2 is 1/60 s after 0.05
+        # a 2-frame gap between two pieces: the first runs on while its footage lasts
+        c["cover"] = [{"media": "b", "in": 0.0, "out": 1.0, "at": 1.0}, {"media": "b", "in": 5.0, "out": 6.0, "at": 2.06}]
+        self.assertEqual([(f0, f1) for _, f0, f1, _, _ in self.piece_frames(c)], [(30, 62), (62, 92)])
+
+    def test_a_three_frame_piece_always_shows(self):
+        for pace in (1.0, 1.1, 1.17, 1.2):
+            c = {"id": "c", "media": "spk", "in": 0.0, "out": 3.3 * pace, "pace": pace,
+                 "cover": [{"media": "b", "in": 0.0, "out": cover_out, "at": 1.1 * pace}]} \
+                if (cover_out := round(0.101 * pace, 3)) else None
+            self.assertEqual([(f0, f1) for _, f0, f1, _, _ in self.piece_frames(c)], [(33, 36)], pace)
+            self.assertEqual(self.S.cover_short(c, self.LIB), [])
+
+    def test_plan_fuzz_whole_frames_and_honest_short(self):
+        import random
+        rnd = random.Random(11)
+        for _ in range(4000):
+            pace = rnd.choice([1.0, 1.1, 1.15, 1.17, 1.2])
+            a = round(rnd.uniform(0, 20), 3)
+            c = {"id": "c", "media": "spk", "in": a, "out": round(a + rnd.uniform(1, 9), 3), "pace": pace, "cover": []}
+            lib = dict(self.LIB, x={"duration": round(rnd.uniform(0.5, 6), 3), "has_video": True})
+            for _ in range(rnd.randint(1, 4)):
+                pin = round(rnd.uniform(0, 3), 3)
+                p = {"media": "x", "in": pin, "out": round(pin + rnd.uniform(0.05, 4), 3),
+                     "at": round(rnd.uniform(a - 1, c["out"]), 3)}
+                if rnd.random() < 0.3:
+                    p["to_end"] = True
+                c["cover"] = self.S.cover_add(c, p)
+            sp, info = self.S.cover_plan(c, lib)
+            n = self.S.clip_frames(c)
+            self.assertEqual(sp[0][0], 0)
+            self.assertEqual(sp[-1][1], n)
+            for (x0, x1, _, _), (y0, _, _, _) in zip(sp, sp[1:]):
+                self.assertEqual(x1, y0, "end to end")
+            for f0, f1, p, t0 in sp:
+                self.assertGreater(f1, f0)
+                if p:
+                    self.assertGreaterEqual(f1 - f0, 3)
+                    self.assertGreaterEqual(t0, p["in"] - 1e-9, "never footage before IN")
+                    self.assertLessEqual(f1 - f0, int((lib["x"]["duration"] - t0) * 30 + 1e-6), "never past the file")
+            for x in info:
+                f0, fe = x["laid"]
+                if x["short"] is None and fe - f0 >= 3:
+                    self.assertTrue(x["shown"] and x["shown"][1] >= fe, x)
+
+    def test_old_stories_render_frame_for_frame_as_before(self):
+        """The stored shape is the one the log always had: no migration. Where the old code
+        rendered what it was asked (pieces and gaps of 3+ frames, footage that lasts), the plan
+        draws the same frames from the same footage. Fuzzed, and every covered clip of the
+        scrubbed real log."""
+        import random
+        old = MigrateCoverFixture.old_spans
+        def compare(c, lib):
+            pc, nf = self.S.clip_pace(c), self.S.clip_frames(c)    # renders always ran clip_frames frames
+            was = [(round(o0 * 30 / pc), nf if o1 >= c["out"] - c["in"] - 1e-9 else round(o1 * 30 / pc), p, o0)
+                   for o0, o1, p in old(c)]
+            now, _ = self.S.cover_plan(c, lib)
+            self.assertEqual([(f0, f1, p is not None) for f0, f1, p, _ in was],
+                             [(f0, f1, p is not None) for f0, f1, p, _ in now], c)
+            for (f0, _, p, o0), (_, _, q, t0) in zip(was, now):
+                if p:
+                    src = p["in"] + (c["in"] + o0 - p["at"]) / self.S.clip_pace(c)
+                    self.assertAlmostEqual(max(p["in"], src), t0, delta=0.002)
+        rnd = random.Random(5)
+        n = 0
+        while n < 3000:
+            pace = rnd.choice([1.0, 1.1, 1.15, 1.17, 1.2])
+            a = round(rnd.uniform(0, 20), 3)
+            c = {"id": "c", "media": "spk", "in": a, "out": round(a + rnd.uniform(2, 9), 3), "pace": pace, "cover": []}
+            t = a + rnd.uniform(0.2, 1)
+            for _ in range(rnd.randint(1, 3)):
+                ln = rnd.uniform(0.2, 2)
+                if t + ln > c["out"] - 0.2:
+                    break
+                pin = round(rnd.uniform(0, 3), 3)
+                c["cover"].append({"media": "b", "in": pin, "out": round(pin + ln, 3), "at": round(t, 3)})
+                t += ln + rnd.uniform(0.2, 1)
+            if c["cover"]:
+                compare(c, self.LIB)
+                n += 1
+        G = H.ROOT / "test" / "golden" / "fold" / "real.state.json"
+        st = json.loads(G.read_text())
+        covered = [c for pj in st["projects"].values() for c in pj["timeline"]["clips"] if c.get("cover")]
+        self.assertEqual(len(covered), 23)
+        for c in covered:
+            compare(c, st["media"])
+
+    def test_split_tighten_and_cut_out_move_footage_one_way(self):
+        S = self.S
+        p = {"media": "b", "in": 2.0, "out": 5.0, "at": 11.0}               # source 11-14 at pace 1.2
+        # a split of a clip from 10.0: the left side is 2 s of source = 50 frames at pace 1.2; the
+        # piece shows from frame 25 (source 11.0), so its footage reached 2.0 + 25/30 = 2.833
+        left, right, notes = S.cover_cut([p], 12.0, 12.0, 1.2, 10.0, self.LIB)    # footage on unbroken
+        self.assertEqual((left, right, notes), ([{**p, "out": 3.0}], [{"media": "b", "in": 2.833, "out": 4.833, "at": 12.0}], []))
+        left, right, notes = S.cover_cut([p], 12.0, 13.0, 1.2, 10.0, self.LIB)    # a cut out: still unbroken,
+        self.assertEqual(right, [{"media": "b", "in": 2.833, "out": 3.833, "at": 13.0}])   # ends on its word
+        inside = {"media": "b", "in": 0.0, "out": 0.5, "at": 12.2}
+        _, right, notes = S.cover_cut([inside], 12.0, 13.0, 1.2, 10.0, self.LIB)
+        self.assertEqual(right, [])
+        self.assertIn("removed: it was laid inside the stretch that was cut out", notes[0])
+        starts_in = {"media": "b", "in": 1.0, "out": 3.0, "at": 12.5}       # starts in the cut: at the next words
+        _, right, _ = S.cover_cut([starts_in], 12.0, 13.0, 1.2, 10.0, self.LIB)
+        self.assertEqual(right, [{"media": "b", "in": 1.0, "out": 2.5, "at": 13.0}])
+        # a split after the footage ran out: nothing on the right, and it is said
+        short = {"media": "m", "in": 1.5, "out": 6.0, "at": 10.0}           # 0.5 s of footage
+        left, right, notes = S.cover_cut([short], 12.0, 12.0, 1.0, 10.0, self.LIB)
+        self.assertEqual(right, [])
+        self.assertIn("footage had run out", notes[0])
+        # tighten: a pause with b-roll laid inside it, one spanning it
+        c = {"id": "c", "media": "spk", "in": 10.0, "out": 17.0,
+             "cover": [{"media": "b", "in": 0.0, "out": 0.6, "at": 12.6}, {"media": "b", "in": 3.0, "out": 6.0, "at": 14.5}]}
+        notes = []
+        parts = S.tighten_clip(c, [(10.0, 12.0), (14.0, 16.0)], lib=self.LIB, notes=notes)
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(any("laid inside" in m for m in notes), notes)
+        self.assertEqual(sum(len(x.get("cover") or []) for x in parts), 1)
+
+    def test_a_split_hands_footage_on_frame_for_frame(self):
+        """Fuzz: split a covered clip anywhere; the right side's first footage frame is the one
+        after the left side's last (counted in the frames the plan draws), at any pace."""
+        import random
+        rnd = random.Random(3)
+        for _ in range(2000):
+            pace = rnd.choice([1.0, 1.1, 1.15, 1.17, 1.2])
+            a = round(rnd.uniform(0, 5), 3)
+            c = {"id": "c", "media": "spk", "in": a, "out": round(a + 6, 3), "pace": pace}
+            p = {"media": "b", "in": round(rnd.uniform(0, 2), 3), "out": 0, "at": round(a + rnd.uniform(0.3, 1.5), 3)}
+            p["out"] = round(p["in"] + 3.5, 3)
+            s_ = round(rnd.uniform(p["at"] + 0.4, p["at"] + 3.1), 3)
+            left, right, _ = self.S.cover_cut([p], s_, s_, pace, a, self.LIB)
+            sl, _ = self.S.cover_plan({**c, "out": s_, "cover": left}, self.LIB)
+            sr, _ = self.S.cover_plan({**c, "in": s_, "cover": right}, self.LIB)
+            if not (sl[-1][2] and sr[0][2]):
+                continue                 # a sliver at the split went to the speaker
+            f0, f1, _, t0 = sl[-1]
+            self.assertAlmostEqual(t0 + (f1 - f0) / 30, sr[0][3], delta=0.0011)
+
+    def test_normalize_resolves_overlaps_and_prunes(self):
+        S = self.S
+        c = {"id": "c", "media": "spk", "in": 0.0, "out": 6.0,
+             "cover": [{"media": "b", "in": 0.0, "out": 2.0, "at": 1.0}, {"media": "b", "in": 5.0, "out": 7.0, "at": 2.0},
+                       {"media": "b", "in": 0.0, "out": 1.0, "at": 7.0}]}
+        probs = []
+        tl = S.normalize_timeline({"aspect": "9:16", "captions": False, "clips": [c]}, self.LIB, probs)
+        cov = tl["clips"][0]["cover"]
+        self.assertEqual([(p["at"], p["at"] + p["out"] - p["in"]) for p in cov], [(1.0, 2.0), (2.0, 4.0)])
+        self.assertTrue(any("laid outside the clip" in m for _, m in probs))
+
+
+class MigrateCoverFixture:
+    """The old renderer's span code, verbatim (studio.py cover_spans at 4fe9106), to prove the
+    stored shape still renders as it did."""
 
     @staticmethod
     def old_spans(clip, fps=30):
-        """What an old-shape piece showed: studio.py's cover_spans before 2026-11-10, verbatim."""
         a, b = clip["in"], clip["out"]
         pace = min(1.2, max(1.0, float(clip.get("pace", 1))))
         d = b - a
@@ -2081,68 +2261,6 @@ class MigrateCovers(unittest.TestCase):
             first = out.pop(0)
             out[0][0] = first[0]
         return [(round(o0, 4), round(o1, 4), x) for o0, o1, x in out]
-
-    def test_migrate_cover_piece_by_piece(self):
-        S = H.import_studio(H.new_home("migrate-unit"))
-        clip = {"id": "c", "media": "m", "in": 10.0, "out": 16.6, "pace": 1.1}     # 6.0 s as it plays
-        new = {"media": "b", "in": 1.0, "start": 0.2, "end": 0.4}
-        old = [{"media": "b", "in": 2.0, "out": 4.2, "at": 9.0, "fit": "fit"},   # starts before the clip
-               {"media": "b", "in": 0.0, "out": 3.3, "at": 15.0},                # runs past its end
-               {"media": "b", "in": 0.0, "out": 1.0, "at": 20.0}, new]           # after it: showed nothing
-        got, dropped = S.migrate_cover(old, clip)
-        self.assertEqual(dropped, 1)
-        self.assertEqual(got, [{"media": "b", "in": 2.909, "start": 0.0, "end": 1.091, "fit": "fit"}, new,
-                               {"media": "b", "in": 0.0, "start": 4.545, "end": 6.0}])
-
-    def test_migration_keeps_the_picture_appends_and_runs_once(self):
-        home = H.new_home("migrate-real")
-        (home / "events.jsonl").write_text((self.G / "real.events.jsonl").read_text().replace("$STUDIO_HOME", str(home)))
-        S = H.import_studio(home)
-        before = (home / "events.jsonl").read_bytes()
-        old = {slug: pj["timeline"] for slug, pj in S.state()["projects"].items() if S.legacy_cover(pj["timeline"])}
-        self.assertEqual(len(old), 5)
-        # until it has run, an old story is refused, never read as reel time
-        r = H.cli(home, "timeline", "show", next(iter(old)), check=False)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("studio migrate covers", r.stderr)
-        r = H.cli(home, "migrate", "covers", "--dry-run")
-        self.assertEqual(r.stdout.count("(dry run: nothing saved)"), 5, r.stdout)
-        self.assertEqual((home / "events.jsonl").read_bytes(), before, "a dry run writes nothing")
-        r = H.cli(home, "migrate", "covers")
-        self.assertEqual(r.stdout.count("cover pieces to reel time"), 5, r.stdout)
-        log = (home / "events.jsonl").read_bytes()
-        self.assertTrue(log.startswith(before), "appended to, never rewritten")
-        added = [json.loads(l) for l in log[len(before):].decode().splitlines() if l.strip()]
-        self.assertEqual(sorted((e["type"], e["data"]["project"]) for e in added),
-                         sorted(("timeline.saved", slug) for slug in old))
-        st = S.state()
-        pieces = 0
-        for slug, tl0 in old.items():
-            tl = st["projects"][slug]["timeline"]
-            self.assertFalse(S.legacy_cover(tl))
-            self.assertEqual(len(tl["clips"]), len(tl0["clips"]))
-            for c0, c in zip(tl0["clips"], tl["clips"]):
-                self.assertEqual({k: v for k, v in c.items() if k != "cover"},
-                                 {k: v for k, v in c0.items() if k != "cover"}, "only cover changes")
-                self.assertEqual(S.cover_short(c, st["media"]), [], "migrating never cuts a piece short")
-                pieces += len(c.get("cover") or [])
-                # the same picture: the same stretches (within a frame) of the same footage
-                was, now = self.old_spans(c0), S.cover_spans(c, st["media"])
-                self.assertEqual([x is None for *_, x in was], [x is None for *_, x in now], (slug, c["id"]))
-                pace = S.clip_pace(c)
-                for (a0, b0, p0), (a1, b1, p1) in zip(was, now):
-                    self.assertAlmostEqual(a0, a1, delta=pace / 30 + 1e-3)
-                    self.assertAlmostEqual(b0, b1, delta=pace / 30 + 1e-3)
-                    if p0:
-                        self.assertEqual(p0["media"], p1["media"])
-                        old_src = p0["in"] + (c0["in"] + a1 - p0["at"]) / pace
-                        self.assertAlmostEqual(old_src, S.cover_src(p1, c, a1), delta=0.002)
-        self.assertEqual(pieces, 24)
-        # idempotent: nothing old left, nothing written
-        r = H.cli(home, "migrate", "covers")
-        self.assertIn("nothing to migrate", r.stdout)
-        self.assertEqual((home / "events.jsonl").read_bytes(), log)
-        self.assertIn("in the reel", H.cli(home, "timeline", "show", next(iter(old))).stdout)
 
 
 @unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")
@@ -2439,7 +2557,7 @@ class Exact(unittest.TestCase):
             self.assertEqual(samples, n * 1600, f"part {k}: sound is exactly as long as the picture")
             self.assertEqual(types, ["video", "audio"], f"part {k}: no timecode track")
         clip = {"id": "c1", "media": self.d, "in": 0.62, "out": 4.13, "pace": 1.1,
-                "cover": [{"media": self.r, "in": 2.0, "start": 0.62, "end": 1.53}]}
+                "cover": [{"media": self.r, "in": 2.0, "out": 3.0, "at": 1.3}]}
         f = out / "covered.mov"
         self.S.render_covered(st, clip, f)
         pts, samples, types = self.av(f)

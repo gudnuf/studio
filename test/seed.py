@@ -152,7 +152,7 @@ def seed_v2(home, footage=None):
 
     clips = [{"id": "a1000001", "media": talk, "in": 2.0, "out": 9.5, "label": "hook", "moment": 1},
              {"id": "a1000002", "media": talk, "in": 12.0, "out": 20.0, "pace": 1.1,
-              "cover": [{"media": broll, "in": 3.0, "start": 1.0, "end": 3.5}]},
+              "cover": [{"media": broll, "in": 3.0, "out": 6.0, "at": 13.0}]},
              {"id": "a1000003", "media": broll, "in": 0.0, "out": 3.0, "fit": "fill"},
              {"id": "a1000004", "media": memo, "in": 0.0, "out": 4.0}]     # audio-only: normalize drops it
     S.timeline_save(A, {"aspect": "9:16", "captions": True, "clips": clips}, actor="operator")
