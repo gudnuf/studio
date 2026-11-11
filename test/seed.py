@@ -152,7 +152,7 @@ def seed_v2(home, footage=None):
 
     clips = [{"id": "a1000001", "media": talk, "in": 2.0, "out": 9.5, "label": "hook", "moment": 1},
              {"id": "a1000002", "media": talk, "in": 12.0, "out": 20.0, "pace": 1.1,
-              "cover": [{"media": broll, "in": 3.0, "out": 6.0, "at": 13.0}]},
+              "cover": [{"media": broll, "in": 3.0, "start": 1.0, "end": 3.5}]},
              {"id": "a1000003", "media": broll, "in": 0.0, "out": 3.0, "fit": "fill"},
              {"id": "a1000004", "media": memo, "in": 0.0, "out": 4.0}]     # audio-only: normalize drops it
     S.timeline_save(A, {"aspect": "9:16", "captions": True, "clips": clips}, actor="operator")
@@ -174,7 +174,7 @@ def seed_v2(home, footage=None):
         S.emit("render.done", None, project=slug, file=f, duration=round(dur, 2), aspect=tl["aspect"],
                clips=len(tl["clips"]), sha256=digest, actor="agent", secs=12.5, concat="copy",
                loudness={"input_i": -19.2, "input_tp": -3.1, "normalized": True}, timeline=tl,
-               cuts=S.cut_list(tl))
+               cuts=S.cut_list(tl, S.state()["media"]))
         S.emit("job.done", None, job=f"1794150000-{n}", kind="render", result={"file": f})
         return f, digest
 

@@ -3,10 +3,10 @@ exit 0
 --- stdout
 sparks-opener  rev 3  aspect 9:16  captions on   (clip numbers are 1-based, as in the UI)
    1 a1000002  fb6ba265fe81  0:12.0–0:19.0  (6.4s)  talking.mov    [voice natural]  [pace 1.1]
-       cover 1: 0.9–3.6s of the clip shows 184b41aee036 0:03.0–0:05.7  broll.mov
+       cover 1: 1.00–3.50s of the clip (1.00–3.50s in the reel) shows broll.mov 3.00–5.50s
    2 a1000001  fb6ba265fe81  0:02.0–0:09.5  (7.5s)  talking.mov  hook  (moment 1)  [voice natural]
    3 a1000003  184b41aee036  0:00.0–0:03.0  (3.0s)  broll.mov    [voice natural]
   total 0:16.9
 --- stderr
 --- events
-{"data": {"actor": "agent", "project": "sparks-opener", "timeline": {"aspect": "9:16", "captions": true, "clips": [{"cover": [{"at": 13.0, "in": 3.0, "media": "184b41aee036", "out": 6.0}], "id": "a1000002", "in": 12.0, "media": "fb6ba265fe81", "out": 19.0, "pace": 1.1}, {"id": "a1000001", "in": 2.0, "label": "hook", "media": "fb6ba265fe81", "moment": 1, "out": 9.5}, {"fit": "fill", "id": "a1000003", "in": 0.0, "media": "184b41aee036", "out": 3.0}], "voice": "natural"}}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "timeline.saved"}
+{"data": {"actor": "agent", "project": "sparks-opener", "timeline": {"aspect": "9:16", "captions": true, "clips": [{"cover": [{"end": 3.5, "in": 3.0, "media": "184b41aee036", "start": 1.0}], "id": "a1000002", "in": 12.0, "media": "fb6ba265fe81", "out": 19.0, "pace": 1.1}, {"id": "a1000001", "in": 2.0, "label": "hook", "media": "fb6ba265fe81", "moment": 1, "out": 9.5}, {"fit": "fill", "id": "a1000003", "in": 0.0, "media": "184b41aee036", "out": 3.0}], "voice": "natural"}}, "id": "<uuid>", "media": null, "ts": "<ts>", "type": "timeline.saved"}

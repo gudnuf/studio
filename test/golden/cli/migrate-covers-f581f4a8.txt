@@ -1,0 +1,6 @@
+$ studio migrate covers
+exit 0
+--- stdout
+nothing to migrate: every cover is in reel time
+--- stderr
+--- events

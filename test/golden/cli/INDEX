@@ -16,6 +16,8 @@ timeline-rm-sparks-opener-99034951.txt	studio timeline split P CLIP AT | move P 
 timeline-label-sparks-opener-3d4db0a7.txt	studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
 timeline-fit-sparks-opener-e8226599.txt	studio timeline fit P CLIP fill|fit|auto
 timeline-cover-sparks-opener-82cd057b.txt	studio timeline cover P CLIP --with MEDIA IN OUT [--at T]
+timeline-cover-sparks-opener-9381e62a.txt	studio timeline cover P CLIP --with MEDIA IN --fill
+timeline-cover-sparks-opener-2b2c8526.txt	studio timeline cover P CLIP --with MEDIA IN --at T --until-end
 timeline-uncover-sparks-opener-4df41c9e.txt	studio timeline uncover P CLIP [N|all]
 timeline-pace-sparks-opener-41f7fbe9.txt	studio timeline pace P CLIP|all 1.1
 timeline-tighten-sparks-opener-3ac8e8f8.txt	studio timeline tighten P CLIP|all
@@ -33,6 +35,7 @@ notes-e14413da.txt	studio notes --ack NOTE_ID
 log-ee65369d.txt	studio log -n 20
 ab-sparks-opener-afe86da3.txt	studio ab P
 choose-sparks-opener-e038c780.txt	studio choose P A --round R
+migrate-covers-f581f4a8.txt	studio migrate covers
 moments-03efef70.txt	studio moments ID
 draft-4d736ecf.txt	studio draft ID
 moments-4d512399.txt	studio moments

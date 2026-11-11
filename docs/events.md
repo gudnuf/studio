@@ -104,15 +104,38 @@ writes one `bundle.imported` of its own.
   `{id, media, in, out, label?, moment?, fit?, voice?, pace?, cover?}`: `in`/`out` seconds in the
   source (3 decimals), `moment` the 1-based moment it came from, `fit` ∈ `fill | fit`,
   `voice` ∈ `off | natural`, `pace` ∈ [1.0, 1.2] (absent = 1), `cover` a list of
-  `{media, in, out, at, fit?}`, sorted by `at`: b-roll picture (`in`–`out` of `media`) over the clip's
-  sound, starting where the clip's own source is at `at` seconds (source time, like the clip's
-  `in`, not seconds into the clip; the CLI's `--at T` is converted).
+  `{media, in, start, end?, fit?}`, sorted by `start`: b-roll picture over the clip's sound, in
+  **reel time**. `start` and `end` are seconds into the clip as it plays (after `pace`: the
+  export's clock), 3 decimals; no `end` = to the clip's end, whatever its length becomes. `in` is
+  where in `media` the piece starts; the footage plays at normal speed, so it shows `in` to
+  `in + end − start` of it. Pieces don't overlap. The anchor is the clip's on-screen time: a
+  trim, snap or pace leaves a piece at the same `start`/`end`; a split gives each side the part
+  that shows on it (the right side's `start` and `end` minus the split's reel second, its `in`
+  advanced by what the left side showed); a tighten maps `start` and `end` through the
+  shortened clock. Nothing is clamped in the stored piece: what shows is cut at the clip's end
+  and where the footage runs out (`cover_shown`), and `check` fails `cover short` when that is
+  before `end` (or before the clip's end, for a piece without one).
   `timeline.saved` always carries a normalized timeline (`normalize_timeline`).
+- **cover, old shape** (written before 2026-11-10): `{media, in, out, at, fit?}`, `at` on the
+  clip's *source* clock (seconds of its media, like the clip's `in`), covering `out − in` source
+  seconds, the footage from `in` at normal speed. This is a breaking change made on purpose (the
+  operator's call: "make sure clips are timed well"), so it breaks the change rule above in one
+  controlled way: the log keeps the old pieces as history (old `timeline.saved` and
+  `render.done.timeline` events are never rewritten, and a fold folds whatever they say), and
+  `studio migrate covers` appends one `timeline.saved` per project whose current story still has
+  old pieces, with the same picture in reel time: `start = (at − clip.in) / pace`,
+  `end = min(start + (out − in) / pace, clip length)`, a piece starting before the clip moved to
+  0 with its `in` advanced to match, a piece showing under 0.1 s dropped. Idempotent: it writes
+  nothing when no old piece is left. Writers write only the new shape; the CLI and server refuse
+  to save or render a story with old pieces (`LegacyCover`), and `check` refuses an export
+  rendered from one. A piece's shape tells which it is: `at` (old) or `start` (new).
 - **fp / reel**: 16-hex fingerprints. `fp` = `clip_fp(clip)` (sha256 of the clip's sorted JSON
   minus `id`, `label`, `moment`); `reel` = `reel_fp(timeline)`. Exceptions bind to them.
 - **rule names** (check), as seen in the real log: `cuts, shortest, first word, pauses, length,
-  loudness, picture, captions, ending, flash, stray, pop, jump, fragment, click, held, soft`.
-  Only `pauses, shortest, first word, picture, length, jump, held` can be excepted (`EXCEPTABLE`).
+  loudness, picture, captions, ending, flash, stray, pop, jump, fragment, click, held, soft`;
+  new 2026-11-10: `cover short`. Only `pauses, shortest, first word, picture, length, jump, held,
+  cover short` can be excepted (`EXCEPTABLE`). A rule name is normalized on input (`cover-short`
+  is `cover short`).
 
 ## 4. Event types
 

@@ -267,9 +267,9 @@
      "failures": [
       {
        "clip": "a1000002",
-       "fp": "f5e79db73b5374e2",
+       "fp": "bb7121dc5749b941",
        "item": "0.55s pause at 9.40s (clip 2)",
-       "reel": "092f06cbc412019b",
+       "reel": "a4bf56f1eb22d1e7",
        "rule": "pauses"
       }
      ],
@@ -287,16 +287,16 @@
      "failures": [
       {
        "clip": "a1000002",
-       "fp": "f5e79db73b5374e2",
+       "fp": "bb7121dc5749b941",
        "item": "0.55s pause at 9.40s (clip 2)",
-       "reel": "092f06cbc412019b",
+       "reel": "a4bf56f1eb22d1e7",
        "rule": "pauses"
       },
       {
        "clip": "a1000003",
        "fp": "8f0dd61863e8023a",
        "item": "black 14.0-14.2s",
-       "reel": "092f06cbc412019b",
+       "reel": "a4bf56f1eb22d1e7",
        "rule": "picture"
       }
      ],
@@ -329,7 +329,7 @@
      "actor": "agent",
      "brand": "jefe",
      "clip": "a1000002",
-     "fp": "f5e79db73b5374e2",
+     "fp": "bb7121dc5749b941",
      "id": "9923eddf",
      "project": "sparks-opener",
      "rule": "pauses",
@@ -352,16 +352,16 @@
        "same": true
       },
       {
-       "at": 8.4,
+       "at": 8.5,
        "clip": 2,
-       "frame": 252,
+       "frame": 255,
        "kind": "picture",
        "same": false
       },
       {
-       "at": 11.133,
+       "at": 11.0,
        "clip": 2,
-       "frame": 334,
+       "frame": 330,
        "kind": "picture",
        "same": false
       },
@@ -398,10 +398,10 @@
        {
         "cover": [
          {
-          "at": 13.0,
+          "end": 3.5,
           "in": 3.0,
           "media": "a78e65aab386",
-          "out": 6.0
+          "start": 1.0
          }
         ],
         "id": "a1000002",
@@ -429,9 +429,9 @@
         "by": "agent",
         "clip": "a1000002",
         "exception": "9923eddf",
-        "fp": "f5e79db73b5374e2",
+        "fp": "bb7121dc5749b941",
         "item": "0.55s pause at 9.40s (clip 2)",
-        "reel": "092f06cbc412019b",
+        "reel": "a4bf56f1eb22d1e7",
         "rule": "pauses",
         "why": "the held beat lands the line; the picture carries it"
        }
@@ -444,7 +444,7 @@
         "clip": "a1000003",
         "fp": "8f0dd61863e8023a",
         "item": "black 14.0-14.2s",
-        "reel": "092f06cbc412019b",
+        "reel": "a4bf56f1eb22d1e7",
         "rule": "picture"
        }
       ],
@@ -465,16 +465,16 @@
        "same": true
       },
       {
-       "at": 8.4,
+       "at": 8.5,
        "clip": 2,
-       "frame": 252,
+       "frame": 255,
        "kind": "picture",
        "same": false
       },
       {
-       "at": 11.133,
+       "at": 11.0,
        "clip": 2,
-       "frame": 334,
+       "frame": 330,
        "kind": "picture",
        "same": false
       },
@@ -511,10 +511,10 @@
        {
         "cover": [
          {
-          "at": 13.0,
+          "end": 3.5,
           "in": 3.0,
           "media": "a78e65aab386",
-          "out": 6.0
+          "start": 1.0
          }
         ],
         "id": "a1000002",
@@ -542,9 +542,9 @@
         "by": "agent",
         "clip": "a1000002",
         "exception": "9923eddf",
-        "fp": "f5e79db73b5374e2",
+        "fp": "bb7121dc5749b941",
         "item": "0.55s pause at 9.40s (clip 2)",
-        "reel": "092f06cbc412019b",
+        "reel": "a4bf56f1eb22d1e7",
         "rule": "pauses",
         "why": "the held beat lands the line; the picture carries it"
        }
@@ -590,10 +590,10 @@
      {
       "cover": [
        {
-        "at": 13.0,
+        "end": 3.5,
         "in": 3.0,
         "media": "a78e65aab386",
-        "out": 6.0
+        "start": 1.0
        }
       ],
       "id": "a1000002",

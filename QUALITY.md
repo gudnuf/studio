@@ -24,6 +24,7 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Length | 15–35s by default; up to 60s only if every beat earns it |
 | Loudness | −14 LUFS integrated (±1), true peak ≤ −1 dBTP |
 | No black or frozen frames | none, unless excepted (a designed card: an exception with `--card`) |
+| Every cover runs to its end (`cover short`) | each b-roll piece shows to the end it was laid to: no edit since (trim, pace) and no shortage of footage stopped it early, putting the speaker back where b-roll was meant |
 | No stray frames at a cut (`flash`) | no frame that belongs to neither shot: two picture changes within 3 frames |
 | Every picture cut is in the timeline (`stray`) | no picture change within 0.5s of a cut that isn't the cut (picture from past a clip's edge, a cut off its frame) |
 | No one-frame pops (`pop`) | no single black (mean luma < 16) or white (> 239) frame |
@@ -62,7 +63,9 @@ studio exception revoke P ID --why "that silence drags"                 # the op
 ```
 
 - Rules that may bend: `pauses`, `shortest`, `first word`, `picture`, `length`, `jump` (a jump
-  cut that's meant: time skipped on purpose, in plain sight) and `held` (a frame held on purpose).
+  cut that's meant: time skipped on purpose, in plain sight), `held` (a frame held on purpose)
+  and `cover short` (a piece that stops early, the face coming back where it works; usually
+  better laid again to the length that's meant).
   The rest (a cut inside a word, loudness, captions against the audio, a filler ending, a stray
   or flashed frame, a clipped word or click at a cut) are defects, never choices.
 - An exception binds to what it was granted on: that clip as it was (media, in/out, effects), or
@@ -122,3 +125,6 @@ references win; update this file.
 - 2026-11-09, editors: soft first frames and frames held at cuts in the exports (the join was
   re-encoded; parts' sound ran longer than their picture). → renders are frame-exact and join
   losslessly; `held` is a hard rule.
+- 2026-11-10, editors (three of them): b-roll meant to cover a paced clip showed a stub of the
+  speaker instead (cover times on the source clock, footage clamped silently). → cover speaks
+  reel time, never clamps, and `cover short` fails a piece that stops before its end.

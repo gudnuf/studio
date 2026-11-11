@@ -223,6 +223,12 @@ try:
     mo = {m["n"]: m for m in ST["media"][sw]["moments"]}
     J = "const st = await import('/ui/store.js'), ops = await import('/ui/ops.js');"
 
+    # cover: the UI splits a covered clip the way the CLI does (reel time, docs/events.md §3)
+    cov = [{"media": sr, "in": 1.0, "start": 0.5, "end": 2.5}, {"media": sr, "in": 4.0, "start": 3.0}]
+    js_split = c.js(f"(async () => {{ {J} return [1.0, 2.75, 3.5].map(t => ops.coverSplit({json.dumps(cov)}, t)); }})()")
+    py_split = [list(SM.cover_split(cov, t)) for t in (1.0, 2.75, 3.5)]
+    check("the UI splits a cover like the CLI (reel time)", js_split == py_split, (js_split, py_split))
+
     # Q3 + Q7: a clip added from moment 2 (the real "+ Add to story" button), then trimmed so it
     # overlaps moment 1 more than moment 2
     c.js("document.querySelector('.tab[data-tab=clip]').click()")

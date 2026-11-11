@@ -5,7 +5,7 @@
 
 import { S, on, emit, commit, select, setPlayhead, gestureBegin, gesturePreview, gestureEnd,
   gestureCancel, mediaOf, total } from './store.js';
-import { layout, dur, trim, insert, MIN_CLIP, indexOf, splitAt, clipAt } from './ops.js';
+import { layout, dur, trim, insert, MIN_CLIP, indexOf, splitAt, clipAt, paceOf } from './ops.js';
 import { getTranscript, logChoice } from './api.js';
 import { transcriptStamp } from './player.js';
 import { player } from './player.js';
@@ -109,15 +109,19 @@ function makeNode(c) {
 }
 
 /* Cover: a thin lane along the top of the clip marking where other footage shows over its
-   sound (`studio timeline cover`). Pieces sit on the clip's own media clock (piece.at). */
+   sound (`studio timeline cover`). Pieces are in reel seconds into the clip (after its pace;
+   no end = to the clip's end) and stop where the clip or their footage ends; the lane is drawn
+   on the clip's source clock, like the clip. */
 function drawCover(n, c) {
-  const key = `${c.in}|${c.out}|${zoom.toFixed(3)}|${JSON.stringify(c.cover || null)}`;
+  const key = `${c.in}|${c.out}|${c.pace}|${zoom.toFixed(3)}|${JSON.stringify(c.cover || null)}`;
   if (n.coverKey === key) return;
   n.coverKey = key;
+  const pace = paceOf(c), len = dur(c) / pace;
   const marks = (c.cover || []).map(p => {
-    const a = Math.max(c.in, p.at), b = Math.min(c.out, p.at + p.out - p.in);
+    const left = mediaOf(p.media)?.duration;
+    const a = p.start, b = Math.min(p.end ?? len, len, left != null ? p.start + left - p.in : Infinity);
     if (b - a < 0.05) return null;
-    return el('span', { style: { left: (a - c.in) * zoom + 'px', width: (b - a) * zoom + 'px' } });
+    return el('span', { style: { left: a * pace * zoom + 'px', width: (b - a) * pace * zoom + 'px' } });
   }).filter(Boolean);
   n.cover.replaceChildren(...marks);
   n.node.classList.toggle('covered', marks.length > 0);

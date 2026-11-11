@@ -1,5 +1,9 @@
 // Pure timeline operations. A timeline is {aspect, captions, clips:[{id, media, in, out, label?,
-// moment? (the moment n it was added from), fit? ('fill' | 'fit'; absent = fitDefault)}]}.
+// moment? (the moment n it was added from), fit? ('fill' | 'fit'; absent = fitDefault), pace?,
+// voice?, cover?}]}. cover = [{media, in, start, end?, fit?}]: b-roll over the clip's sound,
+// start/end in REEL seconds into the clip (after its pace; no end = to the clip's end), the
+// footage from `in` at normal speed (docs/events.md §3). A trim leaves pieces where they are in
+// the clip; a split or cut gives each side the part that shows on it (coverSplit).
 // Every op returns a NEW timeline (snapshots make undo trivial and cheap).
 
 import { round3 } from './util.js';
@@ -65,15 +69,46 @@ export function setLabel(tl, id, label) {
     return n;
   }));
 }
+const COVER_MIN = 0.1;
+/** How fast the clip plays (1-1.2; absent = 1). */
+export const paceOf = c => Math.min(1.2, Math.max(1, +c.pace || 1));
+/** A clip's cover split at reel second t into the clip: [left side's, right side's] (studio.py
+ *  cover_split). The right side's pieces move to its clock and pick up their footage where the
+ *  left's stop; a piece to the clip's end stays one on both sides. */
+export function coverSplit(cover, t) {
+  const left = [], right = [];
+  for (const p of cover || []) {
+    const e = p.end ?? null;
+    if (p.start < t && Math.min(t, e ?? t) - p.start >= COVER_MIN) left.push(e != null && e > t ? { ...p, end: round3(t) } : { ...p });
+    if (e == null || e > t) {
+      const s = Math.max(0, p.start - t);
+      const q = { ...p, in: round3(p.in + Math.max(0, t - p.start)), start: round3(s) };
+      if (e != null) q.end = round3(e - t);
+      if (e == null || q.end - s >= COVER_MIN) right.push(q);
+    }
+  }
+  return [left, right];
+}
+/** c with the given cover (none = no cover key). */
+function withCover(c, cover) {
+  const n = { ...c };
+  if (cover?.length) n.cover = cover; else delete n.cover;
+  return n;
+}
+/** c cut at source time `at` into [left, right] (right gets id), each with its part of the cover. */
+function cutClip(c, at, id) {
+  const [lc, rc] = c.cover?.length ? coverSplit(c.cover, (at - c.in) / paceOf(c)) : [c.cover, c.cover];
+  return [withCover({ ...c, out: round3(at) }, lc), withCover({ ...c, id, in: round3(at) }, rc)];
+}
 /** Split clip at source time `at`. Returns [tl, rightId] or [tl, null] if too close to an edge. */
 export function splitAt(tl, id, at) {
   const i = indexOf(tl, id);
   if (i < 0) return [tl, null];
   const c = tl.clips[i];
   if (at - c.in < MIN_CLIP || c.out - at < MIN_CLIP) return [tl, null];
-  const right = { ...c, id: newId(), in: round3(at) };
+  const [left, right] = cutClip(c, at, newId());
   const clips = tl.clips.slice();
-  clips.splice(i, 1, { ...c, out: round3(at) }, right);
+  clips.splice(i, 1, left, right);
   return [withClips(tl, clips), right.id];
 }
 export function duplicate(tl, id) {
@@ -92,8 +127,8 @@ export function cutRange(tl, id, a, b) {
   a = Math.max(a, c.in); b = Math.min(b, c.out);
   if (b <= a) return [tl, null];
   const pieces = [];
-  if (a - c.in >= MIN_CLIP) pieces.push({ ...c, out: round3(a) });
-  if (c.out - b >= MIN_CLIP) pieces.push({ ...c, id: pieces.length ? newId() : c.id, in: round3(b) });
+  if (a - c.in >= MIN_CLIP) pieces.push(cutClip(c, a, c.id)[0]);
+  if (c.out - b >= MIN_CLIP) pieces.push(cutClip(c, b, pieces.length ? newId() : c.id)[1]);
   const clips = tl.clips.slice();
   clips.splice(i, 1, ...pieces);
   return [withClips(tl, clips), pieces[0]?.id || pieces[1]?.id || null];

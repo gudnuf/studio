@@ -9,6 +9,7 @@ check projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (#.9s)  sha
               - clip # lead-in #.00s (want #-#.15s)
               - clip # out #.00s is inside speech (#-#): it ends at #
   pass  shortest    every spoken piece >= #.5s
+  pass  cover short  every cover piece shows to its end (#)
   pass  first word  first word at #.29s (want <= #.5s)
   pass  pauses      longest pause #.00s (want <= #.35s inside speech; clips with no speech are picture, not pauses)
   pass  length      #.9s (want #-35s; up to 60s only if every beat earns it)

@@ -51,7 +51,9 @@ studio timeline add P MEDIA IN OUT [--at N] [--snap] --base REV
 studio timeline snap P CLIP|all --base REV       # spoken in/out points onto speech edges
 studio timeline split P CLIP AT | move P CLIP TO | rm P CLIP | label P CLIP TEXT
 studio timeline fit P CLIP fill|fit|auto         # crop to fill / show the whole frame
-studio timeline cover P CLIP --with MEDIA IN OUT [--at T]   # b-roll over the clip's sound
+studio timeline cover P CLIP --with MEDIA IN OUT [--at T]   # b-roll over the clip's sound (reel time)
+studio timeline cover P CLIP --with MEDIA IN --fill         # over the whole clip
+studio timeline cover P CLIP --with MEDIA IN --at T --until-end   # from T to the clip's end
 studio timeline uncover P CLIP [N|all]
 studio timeline pace P CLIP|all 1.1              # a little faster, still natural (1.0-1.2)
 studio timeline tighten P CLIP|all               # long pauses inside speech down to 0.12s
@@ -60,7 +62,7 @@ studio words ID --fix WRONG RIGHT [--all]        # fix a misheard word (captions
 studio render P                                  # export; it shows under "Your videos"
 studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
 studio ready P                                   # exit 0 only if these exact bytes passed a check
-studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length
+studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length|cover short
 studio exception grant P "first word" CLIP --onscreen "TEXT" --why "…"   # the hook is text in the picture
 studio exception grant P picture CLIP --card --why "…"   # a designed card: not "black picture"
 studio choose P CHOSEN --from A,B,C              # log a pick (preference data); ab P = blind A/B
@@ -68,7 +70,8 @@ studio choose P CHOSEN --from A,B,C              # log a pick (preference data);
 studio say "Trimmed clip 2 to start on 'privacy'." --re NOTE_ID
 ```
 
-IN and OUT are seconds in the source media; split's AT is seconds into the clip. Cut on
+IN and OUT are seconds in the source media; split's AT is seconds into the clip (source seconds).
+Cover is the exception, and speaks **reel time** (below). Cut on
 speech, not on Whisper's word times (they run early): `--snap` puts a spoken clip's in point
 just before its first word and its out point a quarter second after its last, never inside a
 word. Moments are snapped already. Don't snap the operator's own trims unless they ask.
@@ -104,7 +107,7 @@ trying. Write the why so the operator can judge it in one read: what the picture
 that the rule misses. Then check again; the exception shows as `EXC` with your reason, and you
 tell the operator which you granted. They may revoke it (`exception.revoked`, with their why);
 read those, they are how your taste gets tuned. Only `pauses`, `shortest`, `first word`,
-`picture`, `length`, `jump` and `held` bend. A label word ("payoff", "hold") no longer exempts anything.
+`picture`, `length`, `jump`, `held` and `cover short` bend. A label word ("payoff", "hold") no longer exempts anything.
 
 An exception binds to what it was granted on: the clip as it is now (media, in/out, every
 effect; not its label), or the whole story when no clip is named. Change that clip (or, for a
@@ -136,6 +139,23 @@ steady, legible inserts (a screen, the part, the paper) over shaky talking foota
 face where it carries something: the hook, a reaction, the payoff. QUALITY.md's "True" rule
 binds here: never another job's paperwork under this job's numbers, never a line placed over a
 different thing than it's about. `check` judges picture-only cuts as picture, not speech.
+
+Cover speaks **reel time**: T (and `--until U`) are seconds into the clip *as it plays* (after
+its pace), the clock you see in the export and in `check`; IN and OUT are seconds of MEDIA, which
+plays at normal speed, so OUT − IN is also how long it covers. No conversion by hand: the
+command says back where the piece lands in the reel, the clip's source seconds under it and the
+footage it uses. `--until U` covers to U, `--until-end` to the clip's end (it follows later
+trims), `--fill` the whole clip. Nothing is clamped: a span past the clip's end or footage too
+short for the span is refused, with the length it needs and what would work; take one of those.
+`timeline show` lists every piece in reel time with the footage it shows.
+
+A piece stays where it is in the clip's on-screen time when you trim, snap or pace the clip; a
+split gives each side its part; a tighten keeps it over the same words. If an edit leaves a
+piece stopping before the end it was laid to (the clip now ends first, or the footage runs out),
+the edit warns and `check` fails `cover short`: lay it again (`--until-end`), shorten it on
+purpose, or uncover. So cover last, after pace, snap and tighten. A story saved before
+2026-11-10 has cover in the old shape; the CLI refuses it until `studio migrate covers` has run
+once (`--dry-run` says what it would change; that is the operator's call on their library).
 
 To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more than 1.2),
 `timeline snap`, then `timeline tighten` (pauses over 0.35s inside speech down to 0.12s, cut in
