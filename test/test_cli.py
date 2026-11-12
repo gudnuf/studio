@@ -2984,6 +2984,11 @@ class EasyRules(unittest.TestCase):
         g = S.caption_gate([{"a": 2.0, "b": 2.9, "text": "late"}], [(2.8, 4.0)])
         self.assertEqual([(c["a"], c["b"]) for c in g], [(2.75, 3.15)])
         self.assertEqual(stray(g, [(2.8, 4.0)]), [])
+        # an export burned by rule 2 (2026-11-11) is still read the way it was burned
+        old = S.caption_gate([{"a": 0.0, "b": 0.5, "text": "Hi"}], spans, rule=2)
+        self.assertEqual([(c["a"], c["b"]) for c in old], [(0.1, 0.5)])
+        self.assertIn("appears 0.25s before the voice", stray(old, spans)[0][0])
+        self.assertEqual(S.CAPTION_RULE, 3)
         # with a caption after it: the two join, and show from the voice
         out = S.caption_gate([{"a": 0.0, "b": 0.5, "text": "So"}, {"a": 0.5, "b": 1.5, "text": "we went"}], spans)
         self.assertEqual(out, [{"a": 0.3, "b": 1.5, "text": "So we went"}])

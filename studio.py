@@ -2399,9 +2399,10 @@ def ass_time(t):
 
 CAP_WORDS = 3
 CAP_MIN = 0.4        # no caption shows for less: a shorter one joins its neighbour (QUALITY.md `caption stray`)
-CAPTION_RULE = 2     # what a render burns, written to render.done so check reads an export by the
+CAPTION_RULE = 3     # what a render burns, written to render.done so check reads an export by the
                      #   rule it was made with. 1 (before 2026-11-11): no minimum, no speech gate, side
-                     #   margins of 1/13; 2: all of this section
+                     #   margins of 1/13; 2: the minimum, the margins, and a gate that could pull a
+                     #   short caption up to 0.4 s ahead of a late voice; 3: all of this section
 _CAP_BREAK = re.compile(r"[.?!,][\"'”’)\]]*$")
 _CAP_STOP = re.compile(r"[.?!][\"'”’)\]]*$")       # the end of a sentence
 
@@ -2466,7 +2467,7 @@ GATE_EARLY = 0.15    # or, to stay CAP_MIN on screen, at most this long before i
                      #   allows 0.20 s on the export's own VAD, which hears edges +-0.04 s)
 GATE_HOLD = 0.2      # and stays this long after it stops (never under CAP_MIN on screen)
 
-def caption_gate(chunks, spans, end=None):
+def caption_gate(chunks, spans, end=None, rule=CAPTION_RULE):
     """Chunks (clip time) held to the speech that is really there. spans: the clip's speech on
     the same clock (part_speech: the media's VAD, not whisper's word times, which run early).
     A chunk that would appear in silence waits for the voice (GATE_LEAD before it); one whose
@@ -2479,6 +2480,8 @@ def caption_gate(chunks, spans, end=None):
     edge cuts, which a trim fixes). No spans: nothing changes."""
     if not spans:
         return chunks
+    if rule < 3:
+        return _caption_gate_2(chunks, spans)
     out, todo = [], list(chunks)
     while todo:
         c = todo.pop(0)
@@ -2508,6 +2511,22 @@ def caption_gate(chunks, spans, end=None):
         out.append({**c, "a": round(a, 3), "b": round(b, 3)} if (a, b) != (c["a"], c["b"]) else c)
     return out
 
+def _caption_gate_2(chunks, spans):
+    """The gate as rule 2 burned it (exports of 2026-11-11, before rule 3): a late caption
+    starts at min(voice - GATE_LEAD, end - CAP_MIN), however far ahead of the voice that is."""
+    out = []
+    for c in chunks:
+        a, b = c["a"], c["b"]
+        if not any(r0 - GATE_LEAD <= a < r1 for r0, r1 in spans):
+            nxt = min((r0 for r0, r1 in spans if a < r0 < b), default=None)
+            if nxt is not None:
+                a = max(a, min(nxt - GATE_LEAD, b - CAP_MIN))
+        ends = [r1 for r0, r1 in spans if r0 < b - 0.1 and r1 > a]
+        if ends and max(ends) < b:
+            b = min(b, max(max(ends) + GATE_HOLD, a + CAP_MIN))
+        out.append({**c, "a": round(a, 3), "b": round(b, 3)} if (a, b) != (c["a"], c["b"]) else c)
+    return out
+
 def clip_captions(item, a, b, pace=1.0, rule=CAPTION_RULE):
     """The captions a clip of item's a-b burns, on the clip's own clock (after its pace): the
     caption rule's chunks, gated to the media's speech. What the render draws and check reads."""
@@ -2515,9 +2534,11 @@ def clip_captions(item, a, b, pace=1.0, rule=CAPTION_RULE):
     chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b, pace, rule), pace)
     if rule < 2:
         return chunks
+    regs = speech_regions(item["id"]) or []
+    if rule < 3:
+        return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, regs, (b - a) / pace * FPS), rule=rule)
     n = frames_of((b - a) / pace)
-    return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, speech_regions(item["id"]) or [], n),
-                        n / FPS)
+    return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, regs, n), n / FPS)
 
 def captions(words, start, end, path, w=1080, h=1920, segments=None):
     """Burn-in captions (ASS): caption_chunks(), big and centred low — the vertical idiom."""
