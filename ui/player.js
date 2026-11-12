@@ -4,7 +4,7 @@
 // Also a "source" mode to preview raw footage / a moment before it's in the story.
 
 import { S, on, emit, setPlayhead, mediaOf, total } from './store.js';
-import { clipAt, layout, dur } from './ops.js';
+import { clipAt, layout, dur, paceOf } from './ops.js';
 import { transcriptNow } from './api.js';
 import { $, el, fmtT, clamp, bsearch } from './util.js';
 import { FORMATS, clipFit } from './formats.js';
@@ -391,10 +391,10 @@ class Player {
     const t = transcriptNow(clip.media, transcriptStamp(m));
     if (!t) return null;
     this._chunks ||= new Map();
-    const key = `${clip.media}|${transcriptStamp(m)}|${clip.in}|${clip.out}|${t.words.length}|${t.segments.length}`;
+    const key = `${clip.media}|${transcriptStamp(m)}|${clip.in}|${clip.out}|${paceOf(clip)}|${t.words.length}|${t.segments.length}`;
     let ch = this._chunks.get(key);
     if (!ch) {
-      ch = captionChunks(t.words, t.segments, clip.in, clip.out);
+      ch = captionChunks(t.words, t.segments, clip.in, clip.out, paceOf(clip));
       if (this._chunks.size > 200) this._chunks.clear();
       this._chunks.set(key, ch);
     }

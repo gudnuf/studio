@@ -2397,15 +2397,20 @@ def ass_time(t):
     return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
 
 CAP_WORDS = 3
+CAP_MIN = 0.4        # no caption shows for less: a shorter one joins its neighbour (QUALITY.md `caption stray`)
 _CAP_BREAK = re.compile(r"[.?!,][\"'”’)\]]*$")
 
-def caption_chunks(words, segments, start, end):
+def caption_chunks(words, segments, start, end, pace=1.0):
     """THE caption rule (ui/captions.js captionChunks is the same, so the preview matches the
     export): the words of [start, end) in chunks of at most 3, closing a chunk early after a
     word ending in . ? ! or , and at a segment boundary. Each chunk shows from its first
     word until the next chunk starts (the last one until its last word ends), in clip time.
     A word counts if it starts inside the clip, even if whisper gave it no length; that's
-    what kept the first word of a clip cut on a sentence start off screen."""
+    what kept the first word of a clip cut on a sentence start off screen.
+    No chunk shows for under CAP_MIN: words of the sentence before or after that the clip's
+    edge cuts through (whisper's word times run early) are dropped, and any other short chunk
+    joins the one before it (when it ends a phrase, or is the last) or the one after.
+    pace: the clip's (times stay in source seconds; CAP_MIN is on the export's clock)."""
     ws = [x for x in words if x["start"] < end and (x["end"] > start or x["start"] >= start)]
     starts = sorted(s["start"] for s in segments or [])
     seg = lambda x: bisect.bisect_right(starts, x["start"] + 1e-3) - 1
@@ -2418,28 +2423,87 @@ def caption_chunks(words, segments, start, end):
             groups.append(cur)
             cur = []
     r3 = lambda v: math.floor(v * 1000 + 0.5) / 1000      # = JS Math.round(v * 1000) / 1000
-    out = []
+    its, least = [], CAP_MIN * pace
     for i, g in enumerate(groups):
         a = max(g[0]["start"], start) - start
-        b = (groups[i + 1][0]["start"] if i + 1 < len(groups) else max(g[-1]["end"], g[-1]["start"] + 0.3)) - start
+        b = (groups[i + 1][0]["start"] if i + 1 < len(groups) else max(g[-1]["end"], g[-1]["start"] + least)) - start
         b = min(b, end - start)
         if b - a > 0.01:
-            out.append({"a": r3(a), "b": r3(b), "text": " ".join(x["w"] for x in g)})
+            its.append({"g": g, "a": a, "b": b})
+    short = lambda x: x["b"] - x["a"] < least - 1e-9
+    # every word of it began before the clip did: the tail of the sentence before; every word
+    # ends after the clip does: the first words of the sentence after. (The clip's own first
+    # words may begin a little early by whisper's clock: the words after them don't.)
+    if its and short(its[0]) and all(w["start"] < start for w in its[0]["g"]):
+        its.pop(0)
+    if its and short(its[-1]) and all(w["end"] > end for w in its[-1]["g"]):
+        its.pop()
+    i = 0
+    while i < len(its):
+        x = its[i]
+        if not short(x) or len(its) == 1:
+            i += 1
+        elif i > 0 and (_CAP_BREAK.search(x["g"][-1]["w"]) or i + 1 == len(its)):
+            its[i - 1]["g"] = its[i - 1]["g"] + x["g"]
+            its[i - 1]["b"] = x["b"]
+            its.pop(i)
+        else:
+            its[i + 1]["g"] = x["g"] + its[i + 1]["g"]
+            its[i + 1]["a"] = x["a"]
+            its.pop(i)
+    return [{"a": r3(x["a"]), "b": r3(x["b"]), "text": " ".join(w["w"] for w in x["g"])} for x in its]
+
+GATE_LEAD = 0.05     # a caption gated to speech appears this long before the voice
+GATE_HOLD = 0.2      # and stays this long after it stops (never under CAP_MIN on screen)
+
+def caption_gate(chunks, spans):
+    """Chunks (clip time) held to the speech that is really there. spans: the clip's speech on
+    the same clock (part_speech: the media's VAD, not whisper's word times, which run early).
+    A chunk that would appear in silence waits for the voice (GATE_LEAD before it); one whose
+    words are over and followed by silence goes GATE_HOLD after them. A chunk with no speech
+    under it at all is left as it is (`check` calls it stray). No spans: nothing changes."""
+    if not spans:
+        return chunks
+    out = []
+    for c in chunks:
+        a, b = c["a"], c["b"]
+        if not any(r0 - GATE_LEAD <= a < r1 for r0, r1 in spans):
+            nxt = min((r0 for r0, r1 in spans if a < r0 < b), default=None)
+            if nxt is not None:
+                a = max(a, min(nxt - GATE_LEAD, b - CAP_MIN))
+        # speech that only starts in the chunk's last tenth of a second is the next chunk's
+        ends = [r1 for r0, r1 in spans if r0 < b - 0.1 and r1 > a]
+        if ends and max(ends) < b:
+            b = min(b, max(max(ends) + GATE_HOLD, a + CAP_MIN))
+        out.append({**c, "a": round(a, 3), "b": round(b, 3)} if (a, b) != (c["a"], c["b"]) else c)
     return out
+
+def clip_captions(item, a, b, pace=1.0):
+    """The captions a clip of item's a-b burns, on the clip's own clock (after its pace): the
+    caption rule's chunks, gated to the media's speech. What the render draws and check reads."""
+    tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
+    chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b, pace), pace)
+    return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, speech_regions(item["id"]) or [],
+                                            (b - a) / pace * FPS))
 
 def captions(words, start, end, path, w=1080, h=1920, segments=None):
     """Burn-in captions (ASS): caption_chunks(), big and centred low — the vertical idiom."""
     return write_ass(caption_chunks(words, segments, start, end), path, w, h)
 
+CAP_SIDE = 0.15      # captions keep to the middle 70% of the width: clear of the platform's
+                     #   buttons on the right (QUALITY.md safe zone), and centred, so the same on the left
+
 def write_ass(chunks, path, w=1080, h=1920):
     """chunks ({a, b, text}, in segment time) as an ASS file; returns how many."""
     size = round(min(w, h) * 0.08)
+    line = max(3, size // 14)                          # the outline, which sits outside the margins
+    side = round(w * CAP_SIDE) + line
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}", "",
              "[V4+ Styles]",
              "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, "
              "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV",
              f"Style: Cap,Helvetica Neue,{size},&H00FFFFFF,&H00000000,&H64000000,1,1,"
-             f"{max(3, size // 14)},0,2,{w // 13},{w // 13},{round(h * 0.27)}",
+             f"{line},0,2,{side},{side},{round(h * 0.27)}",
              "", "[Events]", "Format: Layer, Start, End, Style, Text"]
     for c in chunks:
         text = c["text"].replace("{", "(").replace("}", ")")
@@ -2512,14 +2576,9 @@ def render_segment(item, a, b, out, aspect="9:16", with_captions=True, on_frac=N
     w, h = ASPECTS[aspect]
     fit = fit if fit in FITS else fit_default(item, aspect)
     ass = out.with_suffix(".ass")
-    if chunks is None and pace != 1.0:
-        tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
-        chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b), pace)
-    if chunks is not None:
-        n_caps = with_captions and write_ass(chunks, ass, w, h)
-    else:
-        tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
-        n_caps = with_captions and captions(tr.get("words", []), a, b, ass, w, h, tr.get("segments"))
+    if chunks is None:
+        chunks = clip_captions(item, a, b, pace) if with_captions else []
+    n_caps = with_captions and write_ass(chunks, ass, w, h)
     subs = f",subtitles={ass.name}:fontsdir=/System/Library/Fonts" if n_caps else ""
     sw_fmt = "nv12" if hw()["enc"] else "yuv420p"
     vi = vinfo(item["path"])
@@ -2615,9 +2674,7 @@ def render_covered(st, clip, out, aspect="9:16", with_captions=True, on_frac=Non
     frames than its file has."""
     item = st["media"][clip["media"]]
     a, b, pace = clip["in"], clip["out"], clip_pace(clip)
-    tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
-    chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b), pace) \
-        if with_captions else []
+    chunks = clip_captions(item, a, b, pace) if with_captions else []
     spans, _ = cover_plan(clip, st["media"])
     n = clip_frames(clip)
     pics, done = [], 0
