@@ -4,6 +4,7 @@ exit 0
 $STUDIO_HOME/projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4
 --- stderr
 levelled # spoken clips to one speech level (they were # dB apart)
+clip # drops to silence in places, and no clip has room tone to give: a faint noise floor under it
 --- events
 {"data": ["regions", "sha256", "speech_s"], "media": "184b41aee036", "type": "step.speech"}
 {"data": ["actor", "aspect", "caption_rule", "clips", "concat", "cuts", "duration", "file", "level", "loudness", "project", "secs", "sha256", "timeline"], "media": null, "type": "render.done"}

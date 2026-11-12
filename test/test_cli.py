@@ -1518,6 +1518,140 @@ class Quality(unittest.TestCase):
         self.assertIn("dead air", res["failed"])
         self.assertIn("level step", res["failed"])
 
+    def story(self, name, *adds):
+        slug = self.project(name)
+        for add in adds:
+            H.cli(self.home, "timeline", "add", slug, *add)
+        r = H.cli(self.home, "render", slug, timeout=900)
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]["data"]
+        return slug, r.stderr, ev
+
+    def made(self, name, *args):
+        """A file made with ffmpeg from bursts.mov, ingested once: its media id."""
+        import subprocess
+        ids = {it["name"]: m for m, it in self.S.state()["media"].items()}
+        if name not in ids:
+            work = H.new_home("made-src")
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(self.fx / "bursts.mov"), *args,
+                            str(work / name)], check=True)
+            H.cli(self.home, "ingest", "-p", "q", settled(work / name))
+            ids = {it["name"]: m for m, it in self.S.state()["media"].items()}
+        return ids[name]
+
+    def test_render_never_leaves_dead_air_check_would_fail(self):
+        """`dead air` can't be bent, so the render must never make it. Three ways it used to:
+        a spoken clip in a room so quiet its pauses and tails are under the line (two snapped
+        cuts leave 0.33 s of it), a clip whose own sound is sparse (loud enough at its peaks
+        not to count as silent), and a card whose nearest clip has no room tone to give."""
+        regs = self.known["speech"]
+        s1, s2 = (regs[0][0] - 0.3, regs[0][1] + 0.3, "--snap"), (regs[1][0] - 0.3, regs[1][1] + 0.3, "--snap")
+        # 1. the fixture's own room: about -62 dBFS, and less after the voice chain
+        slug, err, ev = self.story("Quiet room", (self.b, *s1), (self.b, *s2))
+        clips = self.clips(slug)
+        self.assertIn("drops to silence in places: its own room tone under it, low", err)
+        self.assertEqual([x.get("tone") for x in ev["level"]], [c["id"] for c in clips])
+        res, rules = self.check(slug)
+        self.assertEqual(rules["dead air"]["status"], "pass", rules["dead air"])
+        self.assertIn(rules["level step"]["status"], ("pass", "warn"), rules["level step"])
+        self.assertEqual(rules["loudness"]["status"], "pass", rules["loudness"])
+        self.assertEqual(rules["held"]["status"], "pass", rules["held"])
+        self.assertEqual(ev["concat"], "copy")
+
+        # 2. an insert with a tick of its own every second: sound, but silence between
+        tick = self.made("ticks.mp4", "-f", "lavfi", "-i", "sine=f=880:sample_rate=48000", "-filter_complex",
+                         "[1:a]volume='if(lt(mod(t,1),0.03),0.8,0)':eval=frame[a]", "-map", "0:v", "-map", "[a]",
+                         "-t", "6", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k")
+        loud = self.toned()
+        slug, err, ev = self.story("Sparse", (loud, *s1), (tick, 1.0, 3.5), (loud, *s2))
+        clips = self.clips(slug)
+        self.assertIn("clip 2 has no sound of its own: room tone from clip 1 under it, low", err)
+        self.assertEqual(ev["level"][1].get("tone"), clips[0]["id"])
+        res, rules = self.check(slug)
+        self.assertEqual(rules["dead air"]["status"], "pass", rules["dead air"])
+
+        # 3. a voice with digital silence between its words (a gated mic) has no tone to give:
+        # the card goes past it to the clip before, and so does the voice itself
+        keep = "+".join(f"between(t,{a - 0.02:.2f},{b + 0.02:.2f})" for a, b in regs)
+        gated = self.made("gated.mov", "-af", f"volume=0:enable='not({keep})'", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k")
+        card = self.made("silent-card.mp4", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:v", "-map", "1:a",
+                         "-t", "3", "-c:v", "copy", "-c:a", "aac")
+        slug, err, ev = self.story("Donors", (loud, *s1), (gated, *s2), (card, 0.0, 2.5))
+        clips = self.clips(slug)
+        self.assertIn("clip 2 drops to silence in places: room tone from clip 1 under it, low", err)
+        self.assertIn("clip 3 has no sound of its own: room tone from clip 1 under it, low", err)
+        self.assertEqual([x.get("tone") for x in ev["level"]], [None, clips[0]["id"], clips[0]["id"]])
+        res, rules = self.check(slug)
+        self.assertEqual(rules["dead air"]["status"], "pass", rules["dead air"])
+        self.assertIn(rules["level step"]["status"], ("pass", "warn"), rules["level step"])
+
+        # and when no clip has any: a noise floor, said out loud. Never silence
+        slug, err, ev = self.story("No donor", (gated, *s2), (card, 0.0, 2.5))
+        self.assertIn("clip 2 has no sound of its own, and no clip has room tone to give: a faint noise floor under it", err)
+        self.assertEqual([x.get("floor") for x in ev["level"]], [True, True])
+        final = self.home / ev["file"]
+        self.assertEqual(self.S.dead_air(*self.S.heard(final)), [])
+        frames = sum(self.S.clip_frames(c) for c in self.clips(slug))
+        self.assertAlmostEqual(H.ffprobe(final)["duration"], frames / 30, delta=0.03)
+
+    def test_the_master_is_one_gain(self):
+        """The master brings the reel to -14 LUFS with ONE gain, and a limiter for the peaks: it
+        never rides the level, so two voices the render set apart (or together) stay that way.
+        (The two-pass loudnorm before it went dynamic whenever the peaks stood 12.5 dB over the
+        loudness, as speech does, and moved the clips up to 2 LU apart again.)"""
+        import array, subprocess
+        S, work = self.S, Path(tempfile.mkdtemp(dir=H.tmp_root()))
+        # 12 s of noise, 3 dB down in its second half, a 0.6 ms tick 25 dB over it every 0.7 s
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:r=30:d=13",
+                        "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.05:sample_rate=48000:seed=7:d=13",
+                        "-f", "lavfi", "-i", "sine=f=3000:sample_rate=48000:d=13", "-filter_complex",
+                        "[2:a]volume='if(lt(mod(t,0.7),0.0006),0.9,0)':eval=frame[c];[1:a][c]amix=inputs=2:normalize=0,"
+                        "volume='if(gt(t,6),0.7,1)':eval=frame,aformat=channel_layouts=stereo[a]", "-map", "0:v",
+                        "-map", "[a]", "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "pcm_s16le",
+                        str(work / "j.mov")], check=True)
+        def seconds(path):          # the level of each second (dB, by its median sample: the ticks don't count)
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le",
+                                  "-"], capture_output=True, check=True).stdout
+            a, out = array.array("h", raw), []
+            for k in range(12):
+                seg = sorted(abs(v) for v in a[k * 48000 + 4800:(k + 1) * 48000 - 4800])
+                out.append(20 * math.log10(seg[len(seg) // 2] / 32768))
+            return out
+        loud = S.loudnorm(work / "j.mov", work / "out.mp4")
+        self.assertTrue(loud["normalized"] and loud["limited"], loud)
+        gains = [y - x for x, y in zip(seconds(work / "j.mov"), seconds(work / "out.mp4"))]
+        self.assertLess(max(gains) - min(gains), 0.5, f"one gain for every second of it: {gains}")
+        self.assertAlmostEqual(gains[0], loud["gain"], delta=0.5)
+        i, tp, _ = S.measure_loudness(work / "out.mp4")
+        self.assertLessEqual(abs(i - S.LOUD_I), 0.5, i)
+        self.assertLessEqual(tp, S.LOUD_TP, tp)
+
+    def test_levelling_never_clips(self):
+        """A quiet voice with one loud sound in the clip: the gain that brings the voice up would
+        push the peak past full scale. The parts are 16-bit: it is limited, not flattened."""
+        import array, subprocess
+        S, work = self.S, Path(tempfile.mkdtemp(dir=H.tmp_root()))
+        part, frames = work / "part000.mov", 60
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:r=30:d=2",
+                        "-f", "lavfi", "-i", "sine=f=220:sample_rate=48000:d=2", "-filter_complex",
+                        "[1:a]volume='if(between(t,1,1.2),4.0,0.226)':eval=frame,aformat=channel_layouts=stereo[a]",
+                        "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "pcm_s16le",
+                        str(part)], check=True)
+        peak = S.part_levels(part)[1]
+        self.assertAlmostEqual(peak, -9.1, delta=0.3)
+        self.assertEqual(S.level_filter(6.0, peak), (False, "volume=6.00dB"), "inside the headroom: a plain gain")
+        limited, af = S.level_filter(12.0, peak)
+        self.assertTrue(limited)
+        S.resound(part, work, frames, af)
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(part), "-vn", "-ac", "1", "-f", "s16le", "-"],
+                             capture_output=True, check=True).stdout
+        a = array.array("h", raw)
+        self.assertEqual(len(a), frames * 1600, "still 1600 samples a frame")
+        self.assertLessEqual(max(abs(v) for v in a), 32768 * 10 ** (-0.9 / 20), "under full scale")
+        self.assertEqual(sum(abs(v) >= 32700 for v in a), 0, "nothing flattened")
+        quiet = a[4800:43200]            # the quiet voice came up by the whole gain
+        self.assertAlmostEqual(20 * math.log10(max(abs(v) for v in quiet) / 32768), -34.0 + 12.0, delta=0.3)
+        self.assertEqual(H.ffprobe(part)["vcodec"], "h264")
+
     def test_captions_are_drawn_inside_the_safe_zone(self):
         """The burned captions, measured as libass draws them: a long one wraps instead of
         running under the buttons on the right."""

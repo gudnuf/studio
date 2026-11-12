@@ -24,14 +24,15 @@ check projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (#.9s)  sha
   pass  pop         no one-frame black or white pops
   pass  jump        no jump cut (the same shot either side of a cut, nothing hiding it)
   FAIL  fragment    # at #.50s, #.87s (want: no clipped word or breath at a sound cut)
-              - #.50s (frame #): speech-level sound before the cut at #.500s (-# dBFS, floor -#): a clipped word or breath, or too short a tail
+              - #.50s (frame #): speech-level sound before the cut at #.502s (-# dBFS, floor -#): a clipped word or breath, or too short a tail
               - #.87s (frame #): speech-level sound before the cut at #.861s (-# dBFS, floor -#): a clipped word or breath, or too short a tail
   pass  click       no click at a cut
   pass  held        every frame on the # fps grid (none held at a cut)
   pass  soft        the picture settles at once after every cut
   FAIL  captions    #% of words agree (# on screen, # heard; want >= #%)
               - captions '(nothing)' / audio 'quick story last week i walked a property with # sprinkler heads and i realized'
-              - captions 'typing up estimates' / audio 'thats time i wasnt with my kids so heres what i do'
+              - captions 'two' / audio '#'
+              - captions 'typing up estimates' / audio 'every night thats time i wasnt with my kids so heres what i do'
               - captions 'it and' / audio 'through'
               - captions 'audio never leaves my phone that is' / audio 'job while alright were on site at'
               - captions 'privacy part' / audio 'henderson property'
