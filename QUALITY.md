@@ -52,9 +52,11 @@ makes something a rule that can't be bent would fail, with no verb to fix it.
 
 - **Levels.** Every spoken clip's speech is brought to one level; a clip nobody speaks in
   (natural sound) gets the median of those gains (the upper of the two middle ones when the
-  count is even), so it keeps its place against the voices. A gain past a clip's headroom is
-  limited, never clipped. The master after it is one gain for the whole reel and a true-peak
-  limiter: it never rides the level, so the levels set here are the export's.
+  count is even), so it keeps its place against the voices. Peaks that
+  wouldn't fit under the master's ceiling are held clip by clip (a limiter, never clipping),
+  and a voice is made up what that took. The master after it is one gain for the whole reel
+  (a true-peak limiter stands by): it never rides the level, so the levels set here are the
+  export's.
 - **Tone.** The joined sound is measured the way `dead air` measures the export (with a
   margin: 3 dB, 0.1 s), and every clip a silent stretch touches gets room tone mixed under its
   own sound: a card, a silent or sparse insert, a voice in a room so quiet its pauses drop out

@@ -248,8 +248,9 @@ complete beats (and may pick none). Three things hold the hard rules:
   clip. A clip with no speech in it (a silent shot) is left alone, and the operator's own
   trims in the UI are never snapped. Every part of an export gets a 20 ms audio fade in and
   out, so cuts don't click, and `render` brings the reel to −14 LUFS, true peak −1 dBTP, with
-  one gain for the whole reel (measured, then applied) and a true-peak limiter for the peaks
-  that gain would put over; video copied. Nothing in the master follows the programme's level,
+  one gain for the whole reel (measured, then applied) and a true-peak limiter for any peak
+  that gain would put over (levelling has already held them, so it rarely has work); video
+  copied. Nothing in the master follows the programme's level,
   so the levels set clip by clip are the levels in the export.
 - **Frame-exact renders.** Every clip is a whole number of 30 fps frames (its length rounded
   once), and so is every cover stretch inside it. Each part is rendered as exactly that many
@@ -319,8 +320,10 @@ say which is newer); their sizes are still the exports' sizes, so don't look the
 
 Fades are made by construction (not measured). Before the master loudness pass the render
 brings every spoken clip's speech to one level (`level_parts`: speech-gated `ebur128` per part,
-one gain per part, natural-sound clips at the median gain; a gain past a part's headroom is
-limited, never clipped). Then it measures the joined sound the way `dead air` does, at the
+one gain per part, natural-sound clips at the median gain). Peaks that wouldn't fit under the
+master's ceiling are held there and then, clip by clip, by a limiter (never clipped), and a
+voice is measured again and made up what that took: so the master after it is a plain gain,
+and every voice leaves it at one level. Then it measures the joined sound the way `dead air` does, at the
 master's gain and with a margin (3 dB, 0.1 s), and mixes room tone under every part a silent
 stretch touches (`lay_tone`): a spoken clip's own room, else the nearest clip's, passing over
 a donor whose tone is itself silent; a faint noise floor when no clip has any. So a render

@@ -3059,8 +3059,10 @@ def _render_parts(slug, st, tl, work, stamp):
 # ---------- level: every voice at one level, and never digital silence --------------------
 # Before the master, each part's sound gets one gain: a spoken clip's so its speech (the
 # stretches its media's VAD calls speech) sits at LEVEL_I, any other clip's the median of
-# those (natural sound keeps its place against the voices). Peaks that gain would push past
-# full scale are held by a limiter, never flattened. Then the joined sound is measured the way
+# those (natural sound keeps its place against the voices). Peaks that would not fit under the
+# master's ceiling are held here, clip by clip, by a limiter (never clipped), and a voice is
+# made up what that took: so the master is a plain gain, and every voice leaves it at one
+# level. Then the joined sound is measured the way
 # `dead air` measures the export (at the master's gain): every part a silent stretch touches
 # gets room tone mixed under its own sound. A spoken clip gives its own (the room between its
 # words); any other takes the nearest clip's: its tail if the source runs on without words,
@@ -3070,7 +3072,7 @@ def _render_parts(slug, st, tl, work, stamp):
 
 LEVEL_I = -23.0                 # LUFS, speech-gated, per spoken clip (the master sets the reel's level)
 LEVEL_MIN_SPEECH = 0.5          # less speech than this in a clip can't be measured: it rides the median
-LEVEL_PEAK = -1.0               # dBFS: a gain that would lift a part's loudest sample past this is limited
+LEVEL_NEAR = 0.15               # a limited clip's speech is brought back this close to LEVEL_I (LU)
 TONE_UNDER = (34.0, 20.0)       # tone under a clip sits this far under LEVEL_I (RMS dB): at
                                 #   least / at most. Under a -14 LUFS master: about -48 to -34 dBFS
 TONE_CLEAR = 0.15               # tone is taken this far from any word
@@ -3171,12 +3173,33 @@ def tone_span(clip, item, regions, after=True, need=TONE_TAIL):
 
 def level_filter(gain, peak=None):
     """A part's levelling filter: `gain` dB, and a limiter when that would lift its loudest
-    sample (`peak`, dBFS) past LEVEL_PEAK: the parts are 16-bit, and a gain past the headroom
-    would flatten the loudest words. (True, filter) when it limits."""
-    if peak is None or peak + gain <= LEVEL_PEAK:
+    sample (`peak`, dBFS) past LEVEL_CEIL, where the master's one gain would put it over the
+    export's true-peak ceiling (and long before the 16-bit parts would clip). (True, filter)
+    when it limits. At 192 kHz, as the master's: it sees the peaks between samples."""
+    if peak is None or peak + gain <= LEVEL_CEIL:
         return False, f"volume={gain:.2f}dB"
-    return True, (f"volume={gain:.2f}dB,alimiter=limit={10 ** (LEVEL_PEAK / 20):.4f}:level=false:attack=5:release=50"
-                  ":latency=true")
+    return True, (f"volume={gain:.2f}dB,aresample=192000,alimiter=limit={10 ** (LEVEL_CEIL / 20):.4f}:level=false"
+                  f":attack=5:release=50:latency=true,aresample={SR}")
+
+def level_part(part, work, frames, gain, peak, spans=None):
+    """Give a part its gain in place, its peaks held under LEVEL_CEIL. Holding peaks takes a
+    little loudness with them, so a spoken part (spans: its speech, which `gain` was to bring
+    to LEVEL_I) is measured again and made up, three times at most: it ends within LEVEL_NEAR of
+    LEVEL_I. Returns (the gain it got in all, dB; whether its peaks were held)."""
+    total, held = 0.0, False
+    for n in range(4):
+        limited, af = level_filter(gain, peak)
+        if abs(gain) < 0.005 and not limited:
+            break
+        resound(part, work, frames, af)
+        total, held = total + gain, held or limited
+        if not (limited and spans) or n == 3:
+            break
+        lufs, peak = part_levels(part, spans)
+        if lufs is None or abs(LEVEL_I - lufs) <= LEVEL_NEAR:
+            break
+        gain = LEVEL_I - lufs
+    return round(total, 2), held
 
 def resound(part, work, frames, af=None, graph=None, extra=()):
     """Rewrite a part's sound in place, its picture copied: through the filter `af`, or a
@@ -3204,10 +3227,9 @@ def level_parts(parts, tl, lib, work):
         lufs, peak = part_levels(parts[k], part_speech(c, regs) if spoken else None)
         return {"clip": c["id"], "speech": lufs, "peak": peak, "regs": regs, "spoken": spoken}
     def apply(k):
-        x = info[k]
-        if abs(x["gain"]) >= 0.005:
-            x["limited"], af = level_filter(x["gain"], x["peak"])
-            resound(parts[k], work, clip_frames(tl["clips"][k]), af)
+        x, c = info[k], tl["clips"][k]
+        x["gain"], x["limited"] = level_part(parts[k], work, clip_frames(c), x["gain"], x["peak"],
+                                             part_speech(c, x["regs"]) if x["speech"] is not None else None)
     with ThreadPoolExecutor(render_pool_size()) as ex:
         info = list(ex.map(spawn_ctx(measure), range(len(parts))))
         gains = sorted(LEVEL_I - x["speech"] for x in info if x["speech"] is not None)
@@ -3305,13 +3327,11 @@ def level_report(info):
 def level_lines(level):
     """What levelling did, in words, when it did something worth knowing."""
     out = []
-    g = [x["gain"] for x in level or [] if x.get("speech") is not None]
+    g = [x["speech"] for x in level or [] if x.get("speech") is not None]
     if g and max(g) - min(g) >= 1.0:
         out.append(f"levelled {len(g)} spoken clip{'s' if len(g) != 1 else ''} to one speech level "
                    f"(they were {max(g) - min(g):.1f} dB apart)")
     for k, x in enumerate(level or [], 1):
-        if x.get("limited"):
-            out.append(f"clip {k} came up {x['gain']:.1f} dB: its loudest peaks are held under full scale, not clipped")
         why = "has no sound of its own" if x.get("quiet") else "drops to silence in places"
         if x.get("tone"):
             j = next((n for n, y in enumerate(level, 1) if y["clip"] == x["tone"]), "?")
@@ -3354,6 +3374,9 @@ def cut_list(tl, lib):
 
 LOUD_I, LOUD_TP = -14.0, -1.0       # QUALITY.md: -14 LUFS, true peak <= -1 dBTP
 LOUD_CEIL = LOUD_TP - 1.0           # where the limiter holds the peaks: 1 dB for the AAC encoder
+LEVEL_CEIL = LOUD_CEIL - (LOUD_I - LEVEL_I) - 0.5   # dBFS: where levelling holds a part's peaks, so the
+                                    #   master's gain (about LOUD_I - LEVEL_I, a little more when the
+                                    #   reel has quiet stretches) lifts them to its ceiling and no further
 LOUD_NEAR = 0.3                     # the master lands this close to LOUD_I (LU), or goes round again
 
 def loudness_of(path, hear=False):

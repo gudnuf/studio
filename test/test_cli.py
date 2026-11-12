@@ -1625,32 +1625,43 @@ class Quality(unittest.TestCase):
         self.assertLessEqual(abs(i - S.LOUD_I), 0.5, i)
         self.assertLessEqual(tp, S.LOUD_TP, tp)
 
-    def test_levelling_never_clips(self):
-        """A quiet voice with one loud sound in the clip: the gain that brings the voice up would
-        push the peak past full scale. The parts are 16-bit: it is limited, not flattened."""
+    def test_levelling_holds_the_peaks_and_still_lands_on_the_level(self):
+        """The master is one gain, so a clip's peaks have to fit under its ceiling before it:
+        levelling holds them (a limiter, never clipping: the parts are 16-bit) and makes up
+        what the limiter took, so a peaky voice ends at the same speech level as a smooth one,
+        and the master has nothing left to hold."""
         import array, subprocess
         S, work = self.S, Path(tempfile.mkdtemp(dir=H.tmp_root()))
-        part, frames = work / "part000.mov", 60
-        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:r=30:d=2",
-                        "-f", "lavfi", "-i", "sine=f=220:sample_rate=48000:d=2", "-filter_complex",
-                        "[1:a]volume='if(between(t,1,1.2),4.0,0.226)':eval=frame,aformat=channel_layouts=stereo[a]",
-                        "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "pcm_s16le",
-                        str(part)], check=True)
-        peak = S.part_levels(part)[1]
-        self.assertAlmostEqual(peak, -9.1, delta=0.3)
-        self.assertEqual(S.level_filter(6.0, peak), (False, "volume=6.00dB"), "inside the headroom: a plain gain")
-        limited, af = S.level_filter(12.0, peak)
-        self.assertTrue(limited)
-        S.resound(part, work, frames, af)
+        part, frames = work / "part000.mov", 90
+        # a "voice": steady noise, and a 1 ms tick ten times a second that stands far over it
+        rnd, pcm = random.Random(5), array.array("h")
+        for k in range(3 * 48000):
+            v = int(32767 * max(-1.0, min(1.0, rnd.gauss(0, 0.25 if k % 4800 < 48 else 0.02))))
+            pcm.extend((v, v))
+        import wave
+        with wave.open(str(work / "voice.wav"), "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000); w.writeframes(pcm.tobytes())
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=320x240:r=30:d=3",
+                        "-i", str(work / "voice.wav"), "-map", "0:v", "-map", "1:a", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-c:a", "pcm_s16le", str(part)], check=True)
+        spans = [(0.0, 3.0)]
+        lufs, peak = S.part_levels(part, spans)
+        self.assertGreater(peak - lufs, 15, "peaky")
+        self.assertEqual(S.level_filter(-30.0, peak)[0], False, "inside the headroom: a plain gain")
+        gain, held = S.level_part(part, work, frames, S.LEVEL_I - lufs, peak, spans)
+        self.assertTrue(held)
         raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(part), "-vn", "-ac", "1", "-f", "s16le", "-"],
                              capture_output=True, check=True).stdout
         a = array.array("h", raw)
         self.assertEqual(len(a), frames * 1600, "still 1600 samples a frame")
-        self.assertLessEqual(max(abs(v) for v in a), 32768 * 10 ** (-0.9 / 20), "under full scale")
+        lufs2, peak2 = S.part_levels(part, spans)
+        self.assertLessEqual(peak2, S.LEVEL_CEIL + 0.5, "the peaks fit under the master's ceiling")
+        self.assertAlmostEqual(lufs2, S.LEVEL_I, delta=0.3, msg="and the speech is on the level all the same")
+        self.assertGreater(gain, S.LEVEL_I - lufs + 0.3, "it made up what the limiter took")
         self.assertEqual(sum(abs(v) >= 32700 for v in a), 0, "nothing flattened")
-        quiet = a[4800:43200]            # the quiet voice came up by the whole gain
-        self.assertAlmostEqual(20 * math.log10(max(abs(v) for v in quiet) / 32768), -34.0 + 12.0, delta=0.3)
         self.assertEqual(H.ffprobe(part)["vcodec"], "h264")
+        # the master after it is a plain gain: nothing for its limiter to do
+        self.assertLessEqual(peak2 + (S.LOUD_I - S.LEVEL_I), S.LOUD_CEIL)
 
     def test_captions_are_drawn_inside_the_safe_zone(self):
         """The burned captions, measured as libass draws them: a long one wraps instead of
