@@ -2917,6 +2917,7 @@ def _render_parts(slug, st, tl, work, stamp):
             parts = list(ex.map(spawn_ctx(one), range(len(tl["clips"]))))
     finally:
         _exporting[0] -= 1
+    level = level_parts(parts, tl, st["media"], work)
     (work / "list.txt").write_text("".join(f"file '{p.name}'\n" for p in parts))
     # concat -c copy is only safe when every part has the same codec parameters (SPS/PPS);
     # if a part ever differs (e.g. VideoToolbox fell back to its software encoder), re-encode,
@@ -2934,7 +2935,152 @@ def _render_parts(slug, st, tl, work, stamp):
     sh(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "list.txt",
         *vcodec, "-c:a", "copy", *NO_TMCD, str(joined)], cwd=work)
     loud = loudnorm(joined, final)
-    return final, same, t0, loud
+    return final, same, t0, loud, level
+
+# ---------- level: every voice at one level, and never digital silence --------------------
+# Before the master loudnorm, each part's sound gets one gain: a spoken clip's so its speech
+# (the stretches its media's VAD calls speech) sits at LEVEL_I, any other clip's the median of
+# those (natural sound keeps its place against the voices). A clip with no sound of its own (a
+# card, a silent insert between clips) takes room tone from the nearest clip that has sound:
+# its tail if the source runs on without words, else its longest stretch between words, laid
+# low. Sound only: every part keeps its frames, and its 1600 samples a frame.
+
+LEVEL_I = -23.0                 # LUFS, speech-gated, per spoken clip (the master sets the reel's level)
+LEVEL_MIN_SPEECH = 0.5          # less speech than this in a clip can't be measured: it rides the median
+LEVEL_SILENT = -60.0            # a part whose loudest sample is under this (dBFS) has no sound of its own
+TONE_UNDER = (34.0, 20.0)       # tone under a silent clip sits this far under LEVEL_I (RMS dB): at
+                                #   least / at most. Under a -14 LUFS master: about -48 to -34 dBFS
+TONE_CLEAR = 0.15               # tone is taken this far from any word
+TONE_MIN = 0.4                  # the shortest stretch worth looping
+TONE_TAIL = 2.0                 # a shot's own tail is used when it runs this long (or the whole clip)
+
+def leveling():
+    return os.environ.get("STUDIO_LEVEL", "1") != "0"
+
+def part_speech(clip, regions, frames=None):
+    """The clip's speech on its own clock (0 = its first frame, after its pace): [(a, b)]."""
+    pace, n = clip_pace(clip), (frames if frames is not None else clip_frames(clip)) / FPS
+    out = []
+    for r0, r1 in regions or []:
+        a, b = max(0.0, (max(r0, clip["in"]) - clip["in"]) / pace), min(n, (min(r1, clip["out"]) - clip["in"]) / pace)
+        if b - a > 0.05:
+            out.append((round(a, 3), round(b, 3)))
+    return out
+
+def gated_loudness(path, spans):
+    """Integrated loudness (LUFS) of only the stretches `spans` [(a, b)] of a file's sound: its
+    speech-gated loudness when they are its speech. None if there's too little to measure."""
+    if sum(b - a for a, b in spans) < LEVEL_MIN_SPEECH:
+        return None
+    sel = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in spans)
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
+                        f"aselect='{sel}',asetpts=N/SR/TB,ebur128", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    m = re.search(r"I:\s+(-?[\d.]+) LUFS", r.stderr.rpartition("Summary:")[2])
+    v = float(m.group(1)) if r.returncode == 0 and m else None
+    return v if v is not None and v > -69 else None
+
+def sound_peak(path):
+    """The loudest sample of a file's sound in dBFS; None if it has no sound at all."""
+    r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
+                        "volumedetect", "-f", "null", "-"], capture_output=True, text=True)
+    m = re.search(r"max_volume: (-?[\d.]+) dB", r.stderr)
+    return float(m.group(1)) if r.returncode == 0 and m else None
+
+def tone_span(clip, item, regions, after=True, need=TONE_TAIL):
+    """Where room tone for a neighbour of `clip` comes from in its media: (start, end) in source
+    seconds, clear of every word. after: the clip's own tail when the source runs on without
+    words for `need` seconds (TONE_TAIL at most: the shot's sound simply continues); else the
+    longest stretch between words (the nearest to the clip on a tie). None if the file is
+    words wall to wall."""
+    dur = item.get("duration") or clip["out"]
+    edges = [0.0] + [x for r in sorted(regions or []) for x in r] + [dur]
+    gaps = [(a + (TONE_CLEAR if k else 0), b - (TONE_CLEAR if k < len(edges) // 2 - 1 else 0))
+            for k, (a, b) in enumerate(zip(edges[::2], edges[1::2]))]
+    gaps = [(a, b) for a, b in gaps if b - a >= TONE_MIN]
+    if after:
+        g = next(((a, b) for a, b in gaps if a <= clip["out"] and b - clip["out"] >= min(need, TONE_TAIL)), None)
+        if g:
+            return clip["out"], g[1]
+    near = lambda g: min(abs(g[0] - clip["out"]), abs(g[1] - clip["in"]))
+    return max(gaps, key=lambda g: (round(min(g[1] - g[0], 4.0), 1), -near(g)), default=None)
+
+def level_parts(parts, tl, lib, work):
+    """Level the rendered parts in place (see above). Returns what it did, one entry per clip:
+    {clip, gain (dB), speech (LUFS it measured, spoken clips), tone (the clip id whose room
+    tone it took, silent clips)}; [] when levelling is off."""
+    if not leveling():
+        return []
+    clips = tl["clips"]
+    info = []
+    for c, part in zip(clips, parts):
+        item = lib[c["media"]]
+        regs = (ensure_speech(c["media"]) if item.get("has_audio") else []) or []
+        spoken = bool(item.get("has_audio")) and clip_spoken(c, regs)
+        lufs = gated_loudness(part, part_speech(c, regs)) if spoken else None
+        peak = None if spoken else sound_peak(part)
+        info.append({"clip": c["id"], "speech": lufs, "regs": regs, "spoken": spoken,
+                     "silent": not spoken and (peak is None or peak < LEVEL_SILENT)})
+    gains = sorted(LEVEL_I - x["speech"] for x in info if x["speech"] is not None)
+    med = gains[len(gains) // 2] if gains else 0.0
+    for x in info:
+        x["gain"] = round(LEVEL_I - x["speech"] if x["speech"] is not None else med, 2)
+    for i, (c, part, x) in enumerate(zip(clips, parts, info)):
+        tone = None
+        if x["silent"]:
+            donors = [j for j in list(range(i - 1, -1, -1)) + list(range(i + 1, len(clips))) if not info[j]["silent"]]
+            for j in donors[:1]:
+                d, ditem = clips[j], lib[clips[j]["media"]]
+                n = clip_frames(c) * SR // FPS
+                span = tone_span(d, ditem, info[j]["regs"], after=j < i, need=n / SR)
+                if not span:
+                    continue
+                secs = min(span[1] - span[0], n / SR)
+                voice = clip_voice(d, tl, info[j]["spoken"])
+                chain = (VOICE_CHAINS[voice] + "," if voice in VOICE_CHAINS else "") + \
+                    ("asplit[t0][t1];[t1]areverse[t2];[t0][t2]concat=n=2:v=0:a=1,"
+                     f"aloop=loop=-1:size={int(2 * secs * SR) + SR}," if secs * SR < n else "") + \
+                    f"atrim=end_sample={n}"
+                tone = work / f"tone{i:03d}.wav"
+                r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-y", "-ss", f"{span[0]:.3f}",
+                                    "-t", f"{secs:.3f}", "-i", ditem["path"], "-vn", "-filter_complex",
+                                    f"[0:a:0]aresample={SR},{chain},volumedetect[o]", "-map", "[o]",
+                                    "-c:a", "pcm_s16le", "-ar", str(SR), "-ac", "2", str(tone)],
+                                   capture_output=True, text=True)
+                m = re.search(r"mean_volume: (-?[\d.]+) dB", r.stderr)
+                if r.returncode != 0 or not m:
+                    tone = None
+                    continue
+                at = float(m.group(1)) + info[j]["gain"]            # where it sits under the donor
+                lo, hi = LEVEL_I - TONE_UNDER[0], LEVEL_I - TONE_UNDER[1]
+                x["gain"] = round(info[j]["gain"] + min(hi, max(lo, at)) - at, 2)
+                x["tone"] = d["id"]
+        if abs(x["gain"]) < 0.005 and not tone:
+            continue
+        n = clip_frames(c)
+        fd = min(FADE, n / FPS / 4)
+        af = f"volume={x['gain']:.2f}dB" + (f",afade=t=in:d={fd:.3f},afade=t=out:st={n / FPS - fd:.4f}:d={fd:.3f},"
+                                            f"apad,atrim=end_sample={n * SR // FPS}" if tone else "")
+        new = part.with_name(part.stem + ".lv.mov")
+        sh(["ffmpeg", "-y", "-v", "error", "-i", part.name, *(["-i", tone.name] if tone else []),
+            "-map", "0:v:0", "-map", "1:a:0" if tone else "0:a:0", "-c:v", "copy", "-af", af,
+            *part_audio(True), "-ar", str(SR), "-ac", "2", *NO_TMCD, new.name], cwd=work)
+        new.replace(part)
+    return [{k: v for k, v in x.items() if k in ("clip", "gain", "speech", "tone") and v is not None}
+            for x in info]
+
+def level_lines(level):
+    """What levelling did, in words, when it did something worth knowing."""
+    out = []
+    g = [x["gain"] for x in level or [] if x.get("speech") is not None]
+    if g and max(g) - min(g) >= 1.0:
+        out.append(f"levelled {len(g)} spoken clip{'s' if len(g) != 1 else ''} to one speech level "
+                   f"(they were {max(g) - min(g):.1f} dB apart)")
+    for k, x in enumerate(level or [], 1):
+        if x.get("tone"):
+            j = next((n for n, y in enumerate(level, 1) if y["clip"] == x["tone"]), "?")
+            out.append(f"clip {k} has no sound of its own: room tone from clip {j} under it, low")
+    return out
 
 def cut_list(tl, lib):
     """Every cut in a render, on the export's clock: {at, frame, kind, clip, same}. kind
@@ -3012,7 +3158,7 @@ def render(slug, actor="cli"):
         work = pdir(slug) / "render" / stamp
     work.mkdir(parents=True)
     try:
-        final, same, t0, loud = _render_parts(slug, st, tl, work, stamp)
+        final, same, t0, loud, level = _render_parts(slug, st, tl, work, stamp)
     finally:                           # a failed export leaves no parts behind
         shutil.rmtree(work, ignore_errors=True)
     dur = sum(clip_frames(c) for c in tl["clips"]) / FPS
@@ -3020,7 +3166,10 @@ def render(slug, actor="cli"):
     emit("render.done", None, project=slug, file=rel, duration=round(dur, 2),
          aspect=tl["aspect"], clips=len(tl["clips"]), sha256=receipt(final), actor=actor,
          secs=round(time.monotonic() - t0, 2), concat="copy" if same else "reencode",
-         loudness=loud, timeline=tl, cuts=cut_list(tl, st["media"]))
+         loudness=loud, timeline=tl, cuts=cut_list(tl, st["media"]),
+         **({"level": level} if level else {}))
+    for line in level_lines(level):
+        print(line, file=sys.stderr)
     return final
 
 
