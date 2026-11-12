@@ -3059,6 +3059,9 @@ TONE_DB, TONE_SECS = 3.0, 0.1   # tone goes under anything within this of failin
                                 #   over its line, 0.1 s short of its length (the export is AAC, and
                                 #   check hears it again)
 TONE_FLOOR = 8.0                # and sits at least this far over the line in the export (dB)
+TONE_SHARE = 0.1                # a part with less than this of a silent stretch is left alone (the
+                                #   20 ms fade before a card): two such, back to back, are still
+                                #   under TONE_SECS short of the rule
 
 def leveling():
     return os.environ.get("STUDIO_LEVEL", "1") != "0"
@@ -3100,6 +3103,17 @@ def nearly_dead(samples, sr, gain=0.0):
     """`dead_air` with a margin: what would be silent `gain` dB up, or within TONE_DB /
     TONE_SECS of it."""
     return dead_air(samples, sr, DEAD_DB + TONE_DB - gain, DEAD_SECS - TONE_SECS)
+
+def tone_needed(dead, at):
+    """Which parts need tone: {part index: seconds of it that are silent}. dead: the silent
+    stretches [(a, b)] of the joined sound; at: where each part starts, and the last ends
+    (seconds). A part needs it when TONE_SHARE of one stretch or more lies in it."""
+    out = {}
+    for i, (t0, t1) in enumerate(zip(at, at[1:])):
+        shares = [max(0.0, min(b, t1) - max(a, t0)) for a, b in dead]
+        if max(shares, default=0.0) >= TONE_SHARE - 1e-9:
+            out[i] = round(sum(shares), 3)
+    return out
 
 def part_levels(part, spans=None):
     """One pass over a part's sound: (the speech-gated loudness of `spans`, as gated_loudness;
@@ -3213,15 +3227,15 @@ def lay_tone(parts, info, tl, lib, work, samples, gain, sr=16000):
     dead = nearly_dead(samples, sr, gain)
     if not dead:
         return False
-    at = list(itertools.accumulate([0] + [clip_frames(c) for c in clips]))
+    at = [f / FPS for f in itertools.accumulate([0] + [clip_frames(c) for c in clips])]
+    silent = tone_needed(dead, at)
     lo = max(LEVEL_I - TONE_UNDER[0], DEAD_DB + TONE_FLOOR - gain)
     hi = max(lo, LEVEL_I - TONE_UNDER[1])
     def one(i):
         c, part, x = clips[i], parts[i], info[i]
-        t0, t1 = at[i] / FPS, at[i + 1] / FPS
-        silent = sum(max(0.0, min(b, t1) - max(a, t0)) for a, b in dead)
-        if silent <= 0:
+        if i not in silent:
             return False
+        t0, t1 = at[i], at[i + 1]
         n = clip_frames(c) * SR // FPS
         tone, level = work / f"tone{i:03d}.wav", None
         # a spoken clip's own room first; then the clips before it, nearest first, then after
@@ -3245,7 +3259,7 @@ def lay_tone(parts, info, tl, lib, work, samples, gain, sr=16000):
             if mean is None:
                 return False
             level, x["floor"] = lo, True
-        x["quiet"] = silent >= 0.9 * (t1 - t0)
+        x["quiet"] = silent[i] >= 0.9 * (t1 - t0)
         fd = min(FADE, (t1 - t0) / 4)
         resound(part, work, clip_frames(c), extra=[tone.name], graph=
                 f"[1:a:0]volume={level - mean:.2f}dB,afade=t=in:d={fd:.3f},afade=t=out:st={t1 - t0 - fd:.4f}:d={fd:.3f}[t];"

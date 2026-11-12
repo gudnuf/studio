@@ -3080,6 +3080,20 @@ class EasyRules(unittest.TestCase):
         self.assertEqual(S.tone_span({"in": 5.3, "out": 9.3}, it, regs, after=False), (20.15, 30.0))
         self.assertIsNone(S.tone_span({"in": 0.0, "out": 2.0}, {"duration": 2.2}, [[0.0, 2.2]]))
 
+    def test_tone_goes_under_the_parts_a_silence_lies_in(self):
+        S = self.S
+        # a silent card after a voice: the voice's 20 ms fade-out is part of the stretch, and
+        # no reason to lay tone under the whole of the voice
+        self.assertEqual(S.tone_needed([(4.97, 7.5)], [0.0, 5.0, 7.5]), {1: 2.5})
+        # a snapped cut in a quiet room: the tail (0.25 s) needs it; what the lead-in (0.07 s)
+        # leaves is no silence at all
+        self.assertEqual(list(S.tone_needed([(1.75, 2.07)], [0.0, 2.0, 4.0])), [0])
+        # half and half: both
+        self.assertEqual(list(S.tone_needed([(1.9, 2.1)], [0.0, 2.0, 4.0])), [0, 1])
+        # a part is counted by its longest piece of one stretch, and told how much of it is silent
+        self.assertEqual(S.tone_needed([(0.0, 0.06), (1.0, 1.5), (3.94, 4.0)], [0.0, 2.0, 4.0]), {0: 0.56})
+        self.assertEqual(S.tone_needed([], [0.0, 2.0]), {})
+
     def test_part_speech_is_on_the_clips_own_clock(self):
         c = {"in": 10.0, "out": 16.0, "pace": 1.2}
         self.assertEqual(self.S.part_speech(c, [[8.0, 11.2], [12.4, 13.0], [15.99, 18.0]]), [(0.0, 1.0), (2.0, 2.5)])
