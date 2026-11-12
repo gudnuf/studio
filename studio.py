@@ -2399,10 +2399,13 @@ def ass_time(t):
 
 CAP_WORDS = 3
 CAP_MIN = 0.4        # no caption shows for less: a shorter one joins its neighbour (QUALITY.md `caption stray`)
+CAPTION_RULE = 2     # what a render burns, written to render.done so check reads an export by the
+                     #   rule it was made with. 1 (before 2026-11-11): no minimum, no speech gate, side
+                     #   margins of 1/13; 2: all of this section
 _CAP_BREAK = re.compile(r"[.?!,][\"'”’)\]]*$")
 _CAP_STOP = re.compile(r"[.?!][\"'”’)\]]*$")       # the end of a sentence
 
-def caption_chunks(words, segments, start, end, pace=1.0):
+def caption_chunks(words, segments, start, end, pace=1.0, rule=CAPTION_RULE):
     """THE caption rule (ui/captions.js captionChunks is the same, so the preview matches the
     export): the words of [start, end) in chunks of at most 3, closing a chunk early after a
     word ending in . ? ! or , and at a segment boundary. Each chunk shows from its first
@@ -2425,10 +2428,11 @@ def caption_chunks(words, segments, start, end, pace=1.0):
             groups.append(cur)
             cur = []
     r3 = lambda v: math.floor(v * 1000 + 0.5) / 1000      # = JS Math.round(v * 1000) / 1000
-    its, least = [], CAP_MIN * pace
+    its, least = [], (CAP_MIN * pace if rule >= 2 else 0.0)
+    hold = least or 0.3
     for i, g in enumerate(groups):
         a = max(g[0]["start"], start) - start
-        b = (groups[i + 1][0]["start"] if i + 1 < len(groups) else max(g[-1]["end"], g[-1]["start"] + least)) - start
+        b = (groups[i + 1][0]["start"] if i + 1 < len(groups) else max(g[-1]["end"], g[-1]["start"] + hold)) - start
         b = min(b, end - start)
         if b - a > 0.01:
             its.append({"g": g, "a": a, "b": b})
@@ -2482,11 +2486,13 @@ def caption_gate(chunks, spans):
         out.append({**c, "a": round(a, 3), "b": round(b, 3)} if (a, b) != (c["a"], c["b"]) else c)
     return out
 
-def clip_captions(item, a, b, pace=1.0):
+def clip_captions(item, a, b, pace=1.0, rule=CAPTION_RULE):
     """The captions a clip of item's a-b burns, on the clip's own clock (after its pace): the
     caption rule's chunks, gated to the media's speech. What the render draws and check reads."""
     tr = load_json(mdir(item["id"]) / "transcript.json", {"words": []})
-    chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b, pace), pace)
+    chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b, pace, rule), pace)
+    if rule < 2:
+        return chunks
     return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, speech_regions(item["id"]) or [],
                                             (b - a) / pace * FPS))
 
@@ -2497,11 +2503,11 @@ def captions(words, start, end, path, w=1080, h=1920, segments=None):
 CAP_SIDE = 0.15      # captions keep to the middle 70% of the width: clear of the platform's
                      #   buttons on the right (QUALITY.md safe zone), and centred, so the same on the left
 
-def write_ass(chunks, path, w=1080, h=1920):
+def write_ass(chunks, path, w=1080, h=1920, rule=CAPTION_RULE):
     """chunks ({a, b, text}, in segment time) as an ASS file; returns how many."""
     size = round(min(w, h) * 0.08)
     line = max(3, size // 14)                          # the outline, which sits outside the margins
-    side = round(w * CAP_SIDE) + line
+    side = round(w * CAP_SIDE) + line if rule >= 2 else w // 13
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}", "",
              "[V4+ Styles]",
              "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, "
@@ -3227,7 +3233,7 @@ def render(slug, actor="cli"):
     emit("render.done", None, project=slug, file=rel, duration=round(dur, 2),
          aspect=tl["aspect"], clips=len(tl["clips"]), sha256=receipt(final), actor=actor,
          secs=round(time.monotonic() - t0, 2), concat="copy" if same else "reencode",
-         loudness=loud, timeline=tl, cuts=cut_list(tl, st["media"]),
+         loudness=loud, timeline=tl, cuts=cut_list(tl, st["media"]), caption_rule=CAPTION_RULE,
          **({"level": level} if level else {}))
     for line in level_lines(level):
         print(line, file=sys.stderr)
@@ -3542,7 +3548,7 @@ def dead_air(samples, sr, db=DEAD_DB, secs=DEAD_SECS):
             start = None
     return out
 
-def caption_plan(clips):
+def caption_plan(clips, rule=CAPTION_RULE):
     """Every caption the render burned, on the export's clock: [{a, b, text, clip, id, frames}].
     clips: the clips as rendered, each with `at` (its first export second) and `frames`.
     The same chunks the render draws (clip_captions, on the clip's paced clock); frames: how
@@ -3550,7 +3556,7 @@ def caption_plan(clips):
     out = []
     for k, c in enumerate(clips, 1):
         n = c["frames"] / FPS
-        for ch in clip_captions({"id": c["media"]}, c["in"], c["out"], clip_pace(c)):
+        for ch in clip_captions({"id": c["media"]}, c["in"], c["out"], clip_pace(c), rule):
             a, b = round(ch["a"], 2), min(round(ch["b"], 2), n)
             shown = math.ceil(b * FPS - 1e-6) - math.ceil(a * FPS - 1e-6)
             if shown > 0:
@@ -3581,14 +3587,14 @@ def caption_stray(caps, regions):
             out.append((f"{a:.2f}s {c['text']!r} (clip {c['clip']}): " + "; ".join(why), c["id"]))
     return out
 
-def caption_boxes(caps, w, h, work):
+def caption_boxes(caps, w, h, work, rule=CAPTION_RULE):
     """Where each caption sits in the frame: [(x0, y0, x1, y1) or None], in pixels. Drawn by the
     same ASS style and libass the render burns with, one caption a frame on black, measured by
     ffmpeg's bbox (plus the outline, which is black)."""
     if not caps:
         return []
     ass = Path(work) / ".boxes.ass"
-    write_ass([{"a": k / 10, "b": (k + 1) / 10, "text": c["text"]} for k, c in enumerate(caps)], ass, w, h)
+    write_ass([{"a": k / 10, "b": (k + 1) / 10, "text": c["text"]} for k, c in enumerate(caps)], ass, w, h, rule)
     try:
         r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-f", "lavfi", "-i",
                             f"color=c=black:s={w}x{h}:r=10:d={len(caps) / 10:.1f}", "-vf",
@@ -3679,6 +3685,7 @@ def check(slug, path=None, actor="cli"):
         raise RuntimeError(f"no project {slug}")
     final, ev = export_for(st, slug, path)
     tl = (ev or {}).get("timeline")
+    cap_rule = (ev or {}).get("caption_rule", 1)      # the caption rule these bytes were burned with
     out_dir = final.with_name(final.stem + ".check")
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True)
@@ -3902,7 +3909,7 @@ def check(slug, path=None, actor="cli"):
     elif not tl.get("captions", True):
         rule("captions", "skip", "captions are off")
     else:
-        shown = [x for ch in caption_plan(clips) for x in _words_of(ch["text"])]
+        shown = [x for ch in caption_plan(clips, cap_rule) for x in _words_of(ch["text"])]
         said = [x for w in heard for x in _words_of(w["w"])]
         import difflib
         sm = difflib.SequenceMatcher(None, shown, said, autojunk=False)
@@ -3918,7 +3925,7 @@ def check(slug, path=None, actor="cli"):
         for name in ("caption stray", "safe zone", "product late"):
             rule(name, "skip", "not a studio render: no caption list")
     else:
-        caps = caption_plan(clips) if tl.get("captions", True) else []
+        caps = caption_plan(clips, cap_rule) if tl.get("captions", True) else []
         if not tl.get("captions", True):
             rule("caption stray", "skip", "captions are off")
             rule("safe zone", "skip", "captions are off")
@@ -3932,7 +3939,7 @@ def check(slug, path=None, actor="cli"):
                 rule("safe zone", "skip", f"the safe zones are for 9:16 (this is {tl.get('aspect')})")
             else:
                 w_, h_ = ASPECTS["9:16"]
-                bad = safe_zone(caps, caption_boxes(caps, w_, h_, out_dir), w_, h_)
+                bad = safe_zone(caps, caption_boxes(caps, w_, h_, out_dir, cap_rule), w_, h_)
                 rule("safe zone", not bad, "every caption clear of the top 14%, bottom 20%, left 6% and right 15%"
                      if not bad else f"{len(bad)} caption{'s' if len(bad) != 1 else ''} under the platform's UI "
                      "(top 14%, bottom 20%, left 6%, right 15%)", bad)

@@ -2779,6 +2779,12 @@ class EasyRules(unittest.TestCase):
                   ("cost", 10.6, 11.0), ("money.", 11.0, 11.6), ("Whereas", 11.87, 12.1), ("this", 12.1, 12.3))
         ch = S.caption_chunks(words, [], 10.0, 12.0)
         self.assertEqual([c["text"] for c in ch], ["It's going to", "cost money."])
+        # an export burned before this rule is still read the way it was burned (render.done
+        # says which rule; none = 1), so check sees the flashes that are really in it
+        old = S.caption_chunks(words, [], 10.0, 12.0, rule=1)
+        self.assertEqual([(c["text"], c["a"], c["b"]) for c in old],
+                         [("bearings.", 0.0, 0.1), ("It's going to", 0.1, 0.6), ("cost money.", 0.6, 1.87),
+                          ("Whereas", 1.87, 2.0)])
         # whisper put the next sentence's first words inside the clip, 0.3 s before its out: they
         # follow a full stop and can't show for 0.4 s, so they go too (a comma there: they join)
         late = W(("cost", 10.6, 11.0), ("money.", 11.0, 11.6), ("Welcome", 11.7, 11.85), ("to", 11.85, 11.95))

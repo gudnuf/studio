@@ -6,4 +6,4 @@ $STUDIO_HOME/projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4
 levelled # spoken clips to one speech level (they were # dB apart)
 --- events
 {"data": ["regions", "sha256", "speech_s"], "media": "184b41aee036", "type": "step.speech"}
-{"data": ["actor", "aspect", "clips", "concat", "cuts", "duration", "file", "level", "loudness", "project", "secs", "sha256", "timeline"], "media": null, "type": "render.done"}
+{"data": ["actor", "aspect", "caption_rule", "clips", "concat", "cuts", "duration", "file", "level", "loudness", "project", "secs", "sha256", "timeline"], "media": null, "type": "render.done"}
