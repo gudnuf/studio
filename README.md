@@ -123,7 +123,8 @@ The bar across the top shows these steps, with a tick on each one that's finishe
 4. **Captions & format.** Pick where the video is going (Vertical 9:16 and the others) and
    turn captions on or off. The preview shows the crop (or the fit) and the captions exactly
    as the export will: captions come in chunks of up to 3 words that end at a full stop,
-   question mark or comma, so a chunk never runs across two sentences.
+   question mark or comma, so a chunk never runs across two sentences (one that would show for
+   under 0.4 s joins its neighbour; the export also holds each to the moment the voice is heard).
 5. **Export & post.** Press **Export**. When it's exported, a toast and the **Your videos**
    list (top of the left pane) offer **Check** and **Copy post**. It says **Ready** only once a
    check of that exact file passes. It opens the post drafts for that clip.
@@ -267,7 +268,9 @@ complete beats (and may pick none). Three things hold the hard rules:
 `studio check P` measures the latest export (or `studio check P path/to.mp4`): every spoken
 in/out point against the speech (lead-in 0.05–0.15 s, tail ≥ 0.25 s, never inside speech,
 spoken pieces ≥ 1.5 s), the first word (≤ 0.5 s), pauses inside speech (≤ 0.35 s, VAD on the
-export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), black and
+export itself), length (15–35 s; up to 60 s is a warning), loudness (`ebur128`), silence (`dead
+air`: more than 0.3 s under −60 dBFS), each spoken clip's speech-gated loudness against the
+median clip's (`level step`: ±2 LU), shots under a second between two picture changes (`blip`), black and
 frozen picture (`blackdetect`, `freezedetect`), every cover piece showing to the end it was
 laid to (`cover short`: its footage runs out first), the cuts as rendered (in the same decode: the
 scene-change score with the caption band masked, mean luma and every frame's time; and the
@@ -276,7 +279,10 @@ near a cut that isn't in the timeline (`stray`), one-frame black or white pops (
 cut between two moments of the same footage with nothing hiding it (`jump`), speech-level sound
 right at a sound cut (`fragment`), a click (`click`), a frame off the 30 fps grid (`held`), and,
 as a warning only, a picture that changes again the frame after a cut (`soft`); captions against a fresh
-transcription of the export (≥ 80% of words agree), and the last word (not filler). A clip nobody speaks in (b-roll,
+transcription of the export (≥ 80% of words agree), each caption against the export's speech
+(`caption stray`: in speech or ≤ 0.20 s before it, never up through 0.3 s of silence, never on
+screen under 0.4 s) and against the platform's UI (`safe zone`: drawn by libass on black and
+measured with `bbox`), how soon the product shows (`product late`, a warning), and the last word (not filler). A clip nobody speaks in (b-roll,
 a cartoon, a card) is picture: never a pause. A rule broken on purpose needs an exception,
 granted in words (`studio exception`, QUALITY.md), including the two things nothing measures:
 on-screen text as the hook (`--onscreen`) and a designed card (`--card`). Check marks them `EXC`
@@ -309,8 +315,11 @@ mapping in a `blind.round` event), and `studio choose P A --round ROUND` maps th
 The copies are real copies with identical dates (a clone keeps the export's dates, which would
 say which is newer); their sizes are still the exports' sizes, so don't look them up meanwhile.
 
-Still measured by eye: captions clear of the platform's buttons, and fades are made by
-construction (not measured).
+Fades are made by construction (not measured). Before the master loudness pass the render
+brings every spoken clip's speech to one level (`level_parts`: speech-gated `ebur128` per part,
+one gain per part, natural-sound clips at the median gain) and lays room tone under a clip with
+no sound of its own (from the nearest clip with sound; `STUDIO_LEVEL=0` turns both off); the
+parts keep their frames and their 1600 samples a frame.
 
 ## Cover, voice, pace and tightening
 

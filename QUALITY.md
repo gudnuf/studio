@@ -23,7 +23,10 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | Shortest spoken piece | ≥ 1.5s, and it must be a complete thought (see judgment) |
 | Length | 15–35s by default; up to 60s only if every beat earns it |
 | Loudness | −14 LUFS integrated (±1), true peak ≤ −1 dBTP |
+| Never silence (`dead air`) | no stretch longer than 0.3 s under −60 dBFS RMS anywhere in the export: under a card, between clips, at the end |
+| Every voice at one level (`level step`) | the speech-gated loudness of each spoken clip (its speech only, by the VAD) is within ±2 LU of the reel's median spoken clip. Warns when the reel's loudness range (LRA) is over 6 LU |
 | No black or frozen frames | none, unless excepted (a designed card: an exception with `--card`) |
+| No shot too short to read (`blip`) | no shot under 1.0 s (30 frames) between two picture changes, by the frame plan the render draws. The reel's first and last shot have only one change, and a declared card (`--card`) is never judged |
 | Every cover runs to its end (`cover short`) | each b-roll piece shows to the end it was laid to (in the frames the render draws): its footage never runs out first, putting the speaker back where b-roll was meant |
 | No stray frames at a cut (`flash`) | no frame that belongs to neither shot: two picture changes within 3 frames |
 | Every picture cut is in the timeline (`stray`) | no picture change within 0.5s of a cut that isn't the cut (picture from past a clip's edge, a cut off its frame) |
@@ -33,12 +36,30 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | No click at a cut (`click`) | no sample step at a sound cut 6x the steps around it (and ≥ 0.02 full scale) |
 | Every frame on the grid (`held`) | every frame lasts exactly 1/30 s (renders are frame-exact; none is held at a cut) |
 | Captions match the audio | the export, re-transcribed, says what the captions say |
-| Captions stay clear of platform UI | nothing in the bottom ~20% or the right ~15% of a 9:16 frame |
+| Every caption is with its words (`caption stray`) | caption by caption, not a ratio: it appears in speech, or at most 0.20 s before the voice starts; it never stays up through 0.3 s of nobody speaking; it is never on screen for under 0.4 s |
+| Captions stay clear of platform UI (`safe zone`) | nothing in the top 14%, the bottom 20%, the left 6% or the right 15% of a 9:16 frame, measured on the captions as they are drawn |
 | Ending | the last spoken word is complete and is not filler ("yeah", "so", "um") |
 
 `check` also warns (never fails) on a **soft cut**: the picture changes again the frame after a
 cut, then holds (motion settling, a caption appearing). Usually nothing; look at its strip if it
-reads as a stutter.
+reads as a stutter. And on **`product late`**: the product isn't on screen by 8 s. It counts the
+first caption that names the brand, or the first picture from footage with no sound of its own
+(a screen recording, an insert made for the picture), whichever comes first; it can't see a
+phone filmed in someone's hand, so read the warning, don't obey it blindly.
+
+The render does its part, so three of these pass at the source:
+
+- **Levels.** Before the master loudness pass, every spoken clip's speech is brought to one
+  level; a clip nobody speaks in (natural sound) gets the median of those gains, so it keeps
+  its place against the voices.
+- **Tone.** A clip with no sound of its own (a card, a silent insert as its own clip) gets room
+  tone from the nearest clip that has sound: that shot's own tail when its source runs on
+  without words, else its longest stretch between words, laid 20–34 dB under the voices. A
+  card whose file carries its own sound keeps it.
+- **Captions.** A caption never shows for under 0.4 s: a word of the sentence before or after
+  that the clip's edge cuts through is dropped, any other short caption joins its neighbour.
+  Each caption is held to the speech the VAD hears (it waits for the voice, and goes 0.2 s
+  after it stops), and captions wrap inside the middle 70% of the width.
 It finds the cut rules' findings in the export's own pixels (the caption band masked) and sound, at
 the timeline's cuts, and puts nine numbered frames around each one on the review sheet
 (`jump-f00283.png`, ...).
@@ -63,10 +84,12 @@ studio exception revoke P ID --why "that silence drags"                 # the op
 ```
 
 - Rules that may bend: `pauses`, `shortest`, `first word`, `picture`, `length`, `jump` (a jump
-  cut that's meant: time skipped on purpose, in plain sight), `held` (a frame held on purpose)
-  and `cover short` (a piece that stops early, the face coming back where it works; usually
-  better laid again to the length that's meant).
-  The rest (a cut inside a word, loudness, captions against the audio, a filler ending, a stray
+  cut that's meant: time skipped on purpose, in plain sight), `held` (a frame held on purpose),
+  `cover short` (a piece that stops early, the face coming back where it works; usually
+  better laid again to the length that's meant) and `blip` (a shot under a second that is
+  meant: a flash cut the reel is built on).
+  The rest (a cut inside a word, loudness, silence, a voice at another level, captions against
+  the audio or away from their words or under the platform's buttons, a filler ending, a stray
   or flashed frame, a clipped word or click at a cut) are defects, never choices.
 - An exception binds to what it was granted on: that clip as it was (media, in/out, effects), or
   the whole story for one without a clip. If that changes, it lapses and must be granted again.
@@ -128,3 +151,9 @@ references win; update this file.
 - 2026-11-10, editors (three of them): b-roll meant to cover a paced clip showed a stub of the
   speaker instead (`--at` on the source clock, footage clamped silently). → cover speaks
   reel time, never clamps, and `cover short` fails a piece whose footage stops before its end.
+- 2026-11-11, craft review of the three finished reels (athanor reels-craft-research-2026-11):
+  two shots of 0.6 s, a second voice 4–6 dB under the first, 2.5–3 s of digital silence under
+  two end cards, and the caption "Whereas this" for four frames at the end of a payoff, all in
+  reels that had passed. → `blip`, `level step`, `dead air`, `caption stray`, the top and left
+  safe zones and the `product late` warning; the render levels voices, lays tone under silent
+  clips and keeps every caption with its words.

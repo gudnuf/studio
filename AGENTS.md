@@ -62,7 +62,7 @@ studio words ID --fix WRONG RIGHT [--all]        # fix a misheard word (captions
 studio render P                                  # export; it shows under "Your videos"
 studio check P                                   # measure it against QUALITY.md (exit 1 = fix it)
 studio ready P                                   # exit 0 only if these exact bytes passed a check
-studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length|cover short
+studio exception grant P RULE [CLIP] --why "…"   # bend pauses|shortest|first word|picture|length|cover short|blip
 studio exception grant P "first word" CLIP --onscreen "TEXT" --why "…"   # the hook is text in the picture
 studio exception grant P picture CLIP --card --why "…"   # a designed card: not "black picture"
 studio choose P CHOSEN --from A,B,C              # log a pick (preference data); ab P = blind A/B
@@ -83,9 +83,11 @@ without replying. `studio log -n 20` shows the latest events from both of you.
 [QUALITY.md](QUALITY.md) is the bar. Read it before you build a story. Then, every time:
 
 1. `studio render P`, then `studio check P`. It measures the export against the hard rules
-   (cuts on speech edges, first word, pauses, length, loudness, black or frozen picture, and
-   at every cut: no stray or flashed frames, no jump cut, no clipped word, no click, no held
-   frame; captions against what the export really says, the last word) and exits 1 if one fails.
+   (cuts on speech edges, first word, pauses, length, loudness, no silence, every voice at one
+   level, black or frozen picture, no shot under a second, and at every cut: no stray or flashed
+   frames, no jump cut, no clipped word, no click, no held frame; captions against what the
+   export really says, each caption with its words and clear of the platform's buttons, the
+   last word) and exits 1 if one fails.
 2. **Look at the review sheet** it prints the path of: `cut-*.png` (frames, waveform, speech
    and the words heard, 1.5s either side of every cut), one nine-frame strip per cut finding
    (`jump-f00283.png`: the frame numbers are the export's) and `contact.png` (the whole export).
@@ -107,7 +109,7 @@ trying. Write the why so the operator can judge it in one read: what the picture
 that the rule misses. Then check again; the exception shows as `EXC` with your reason, and you
 tell the operator which you granted. They may revoke it (`exception.revoked`, with their why);
 read those, they are how your taste gets tuned. Only `pauses`, `shortest`, `first word`,
-`picture`, `length`, `jump`, `held` and `cover short` bend. A label word ("payoff", "hold") no longer exempts anything.
+`picture`, `length`, `jump`, `held`, `cover short` and `blip` bend. A label word ("payoff", "hold") no longer exempts anything.
 
 An exception binds to what it was granted on: the clip as it is now (media, in/out, every
 effect; not its label), or the whole story when no clip is named. Change that clip (or, for a
@@ -166,6 +168,37 @@ To make a speaker faster but still natural: `timeline pace P CLIP 1.1` (no more 
 silence). Tightening only removes silence; it never joins words into something nobody said.
 
 A held shot or pause that is meant (a payoff, a reveal) gets an exception, with why (above).
+
+**Short shots.** A shot between two picture changes that lasts under a second is a `blip`: too
+short to read. Hold it longer, or cover across it so the picture before or after runs on (a
+cover piece whose footage continues over a cut is one shot). The first and last shot of the
+reel and a declared card aren't judged.
+
+## Sound: levels, tone, silence
+
+You don't set levels. `render` brings every spoken clip's speech to one level before the master
+loudness pass, and a clip nobody speaks in rides along at the same gain as the median voice; it
+says so when the voices were more than 1 dB apart. `check` fails `level step` when a spoken
+clip's speech is still more than 2 LU from the median clip's (a clip with under half a second
+of speech can't be levelled; give it more, or drop it).
+
+Nothing in a reel is ever silent: `check` fails `dead air` on more than 0.3 s under −60 dBFS. A
+clip with no sound of its own (an end card, a silent insert used as its own clip) gets room
+tone from the clip before it (its own tail if the source runs on without words, else its
+longest stretch between words), low; `render` says which clip it took it from. To choose the
+tone yourself, give the card its own sound when you make the file (derived media): a card that
+has sound keeps it. A cover piece never needs tone: the clip's sound runs under it.
+
+## Captions
+
+Captions come from the words, three at a time. Two things keep each one with its words: no
+caption shows for under 0.4 s (a word from the sentence before or after that the clip's edge
+cuts through is dropped; any other short caption joins its neighbour), and the export holds
+each caption to the speech the VAD hears. `check` fails `caption stray` on a caption that
+still isn't with its words (it names the caption and the clip): trim the clip so the stray
+word is out, or fix the word (`words --fix`). Captions wrap inside the middle 70% of
+the width; `safe zone` fails one that reaches the top 14%, bottom 20%, left 6% or right 15%.
+`product late` is a warning, not a failure: nothing shows or names the product in the first 8 s.
 
 **Jump cuts.** A cut between two moments of the same footage (what `tighten` makes, a trimmed
 take, a cover piece that skips ahead in its own file) is a jump cut, and `check` fails it unless
