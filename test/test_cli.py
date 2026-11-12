@@ -2779,6 +2779,12 @@ class EasyRules(unittest.TestCase):
                   ("cost", 10.6, 11.0), ("money.", 11.0, 11.6), ("Whereas", 11.87, 12.1), ("this", 12.1, 12.3))
         ch = S.caption_chunks(words, [], 10.0, 12.0)
         self.assertEqual([c["text"] for c in ch], ["It's going to", "cost money."])
+        # whisper put the next sentence's first words inside the clip, 0.3 s before its out: they
+        # follow a full stop and can't show for 0.4 s, so they go too (a comma there: they join)
+        late = W(("cost", 10.6, 11.0), ("money.", 11.0, 11.6), ("Welcome", 11.7, 11.85), ("to", 11.85, 11.95))
+        self.assertEqual([c["text"] for c in S.caption_chunks(late, [], 10.5, 12.0)], ["cost money."])
+        late[1]["w"] = "money,"
+        self.assertEqual([c["text"] for c in S.caption_chunks(late, [], 10.5, 12.0)], ["cost money, Welcome to"])
         # a short chunk that ends a phrase joins the one before; one that starts a phrase, the one after
         words = W(("all", 0.0, 0.3), ("of", 0.3, 0.5), ("my", 0.5, 0.8), ("cost", 0.8, 1.1), ("items,", 1.1, 1.4),
                   ("But", 1.4, 1.6), ("with", 1.6, 1.9), ("Jefe", 1.9, 2.3), ("I", 2.3, 2.4), ("walk.", 2.4, 2.9))

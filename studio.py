@@ -2400,6 +2400,7 @@ def ass_time(t):
 CAP_WORDS = 3
 CAP_MIN = 0.4        # no caption shows for less: a shorter one joins its neighbour (QUALITY.md `caption stray`)
 _CAP_BREAK = re.compile(r"[.?!,][\"'”’)\]]*$")
+_CAP_STOP = re.compile(r"[.?!][\"'”’)\]]*$")       # the end of a sentence
 
 def caption_chunks(words, segments, start, end, pace=1.0):
     """THE caption rule (ui/captions.js captionChunks is the same, so the preview matches the
@@ -2432,12 +2433,14 @@ def caption_chunks(words, segments, start, end, pace=1.0):
         if b - a > 0.01:
             its.append({"g": g, "a": a, "b": b})
     short = lambda x: x["b"] - x["a"] < least - 1e-9
-    # every word of it began before the clip did: the tail of the sentence before; every word
-    # ends after the clip does: the first words of the sentence after. (The clip's own first
-    # words may begin a little early by whisper's clock: the words after them don't.)
+    # every word of it began before the clip did: the tail of the sentence before. (The clip's
+    # own first words may begin a little early by whisper's clock: the words after them don't.)
     if its and short(its[0]) and all(w["start"] < start for w in its[0]["g"]):
         its.pop(0)
-    if its and short(its[-1]) and all(w["end"] > end for w in its[-1]["g"]):
+    # every word ends after the clip does, or it follows the end of a sentence and the clip
+    # can't show it for CAP_MIN: the first words of the sentence after
+    if its and short(its[-1]) and (all(w["end"] > end for w in its[-1]["g"]) or
+                                   (len(its) > 1 and _CAP_STOP.search(its[-2]["g"][-1]["w"]))):
         its.pop()
     i = 0
     while i < len(its):

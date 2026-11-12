@@ -13,6 +13,7 @@
 export const CAP_WORDS = 3;
 export const CAP_MIN = 0.4;   // no caption shows for less (QUALITY.md `caption stray`)
 const BREAK = /[.?!,]["'”’)\]]*$/;
+const STOP = /[.?!]["'”’)\]]*$/;    // the end of a sentence
 
 /** Index of the last element of sorted `arr` that is <= x, or -1. */
 function lastLE(arr, x) {
@@ -42,10 +43,12 @@ export function captionChunks(words, segments, start, end, pace = 1) {
     if (b - a > 0.01) its.push({ g, a, b });
   });
   const short = x => x.b - x.a < least - 1e-9;
-  // every word of it began before the clip did: the tail of the sentence before; every word ends
-  // after the clip does: the first words of the sentence after
+  // every word of it began before the clip did: the tail of the sentence before
   if (its.length && short(its[0]) && its[0].g.every(w => w.start < start)) its.shift();
-  if (its.length && short(its.at(-1)) && its.at(-1).g.every(w => w.end > end)) its.pop();
+  // every word ends after the clip does, or it follows the end of a sentence and the clip can't
+  // show it for CAP_MIN: the first words of the sentence after
+  if (its.length && short(its.at(-1)) && (its.at(-1).g.every(w => w.end > end)
+      || (its.length > 1 && STOP.test(its.at(-2).g.at(-1).w)))) its.pop();
   let i = 0;
   while (i < its.length) {
     const x = its[i];
