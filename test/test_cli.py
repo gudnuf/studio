@@ -8,7 +8,7 @@ whisper / keyframes steps); each test then works in its own project. The CLI tes
 call an agent: moments.json is written by hand and step.moments emitted through the studio
 module. The Agents tests run moments/draft through fake agents (test/fakeagents).
 """
-import json, os, re, shutil, subprocess, sys, tempfile, time, unittest
+import json, math, os, random, re, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2824,9 +2824,87 @@ class EasyRules(unittest.TestCase):
         self.assertEqual(S.caption_stray([{**c, "clip": 1, "id": "x", "frames": round((c["b"] - c["a"]) * 30)}
                                           for c in out[:4]], spans), [])
         self.assertIs(S.caption_gate(ch, []), ch, "no speech known: nothing changes")
-        # gating never leaves a chunk under 0.4 s on screen
-        g = S.caption_gate([{"a": 2.0, "b": 2.9, "text": "late"}], [(2.8, 4.0)])[0]
-        self.assertEqual((g["a"], g["b"]), (2.5, 2.9))
+
+    def cap(self, c, k=1):
+        """A gated chunk as check reads it (caption_plan): ASS centiseconds, whole frames."""
+        a, b = round(c["a"], 2), round(c["b"], 2)
+        return {**c, "a": a, "b": b, "clip": k, "id": f"c{k}",
+                "frames": math.ceil(b * 30 - 1e-6) - math.ceil(a * 30 - 1e-6)}
+
+    def test_caption_gate_never_burns_a_caption_check_would_fail(self):
+        """What the gate returns passes `caption stray` on the same speech: a caption never
+        starts more than 0.20 s before the voice to stay 0.4 s on screen. It joins the next
+        caption, holds a little longer, or joins the one before instead."""
+        S = self.S
+        stray = lambda out, spans: S.caption_stray([self.cap(c) for c in out], spans)
+        # a short caption whose voice starts late: it used to come out 0.25 s early (0.10-0.50)
+        spans = [(0.35, 2.0)]
+        out = S.caption_gate([{"a": 0.0, "b": 0.5, "text": "Hi"}], spans)
+        self.assertEqual([(c["a"], c["b"]) for c in out], [(0.3, 0.7)], "nothing after it: it holds 0.4 s")
+        self.assertEqual(stray(out, spans), [])
+        # the clip ends where the caption does: it can't hold longer. Never early to make up for it
+        out = S.caption_gate([{"a": 0.0, "b": 0.5, "text": "Hi"}], spans, 0.5)
+        self.assertGreaterEqual(out[0]["a"], 0.35 - 0.2)
+        self.assertFalse(any("before the voice" in t for t, _ in stray(out, spans)), stray(out, spans))
+        # (the case this test used to assert: 2.0-2.9 s for a voice at 2.8 came out at 2.5, 0.3 s early)
+        g = S.caption_gate([{"a": 2.0, "b": 2.9, "text": "late"}], [(2.8, 4.0)])
+        self.assertEqual([(c["a"], c["b"]) for c in g], [(2.75, 3.15)])
+        self.assertEqual(stray(g, [(2.8, 4.0)]), [])
+        # with a caption after it: the two join, and show from the voice
+        out = S.caption_gate([{"a": 0.0, "b": 0.5, "text": "So"}, {"a": 0.5, "b": 1.5, "text": "we went"}], spans)
+        self.assertEqual(out, [{"a": 0.3, "b": 1.5, "text": "So we went"}])
+        self.assertEqual(stray(out, spans), [])
+        # the last caption of a clip, cut off by its end: it joins the one before, when the
+        # voice hardly stopped between them
+        spans = [(0.1, 1.0), (1.28, 1.5)]
+        out = S.caption_gate([{"a": 0.1, "b": 1.02, "text": "It was in"}, {"a": 1.02, "b": 1.5, "text": "my"}], spans, 1.5)
+        self.assertEqual(out, [{"a": 0.1, "b": 1.5, "text": "It was in my"}])
+        self.assertEqual(stray(out, spans), [])
+
+    def test_caption_gate_fuzz_passes_caption_stray(self):
+        """Seeded clips cut the way snap cuts them (a lead before the first word, a tail after
+        the last), words where the speech is, whisper's word starts running early after every
+        silence: every caption the render would burn passes `caption stray`."""
+        S, rnd = self.S, random.Random(20261111)
+        for case in range(3000):
+            pace = rnd.choice([1.0, 1.0, 1.1, 1.2])
+            t, spans, words = rnd.uniform(0.05, 0.15), [], []
+            for _ in range(rnd.randint(1, 5)):
+                s0, early = t, rnd.uniform(0.0, 0.4)
+                for k in range(rnd.randint(1, 9)):
+                    d = rnd.uniform(0.08, 0.5)
+                    start = max(t - early, words[-1]["end"] if words else -1.0) if k == 0 else t
+                    words.append({"w": "w" + rnd.choice(["", "", "", ",", ".", "?"]), "start": round(start, 2),
+                                  "end": round(t + d, 2)})
+                    t += d
+                spans.append((round(s0, 3), round(t, 3)))
+                t += rnd.uniform(0.12, 1.2)
+            n = spans[-1][1] + rnd.uniform(0.25, 0.6)
+            words[-1]["w"] = "end."
+            # the clip plays at `pace`: source seconds in, the clip's own clock out
+            src = [{**w, "start": w["start"] * pace, "end": w["end"] * pace} for w in words]
+            segs = [{"start": w["start"]} for w in src if rnd.random() < 0.15]
+            chunks = S.paced(S.caption_chunks(src, segs, 0.0, n * pace, pace), pace)
+            out = S.caption_gate(chunks, spans, n)
+            caps = [self.cap(c) for c in out]
+            self.assertEqual(S.caption_stray(caps, spans), [], (case, spans, chunks, out))
+            self.assertEqual(" ".join(c["text"] for c in out), " ".join(c["text"] for c in chunks),
+                             "the gate moves captions; it never changes the words")
+            self.assertTrue(all(x["b"] <= y["a"] + 1e-9 for x, y in zip(out, out[1:])), (case, out))
+
+    def test_a_pause_inside_a_caption_is_for_pauses_to_judge(self):
+        """`caption stray` judges the quiet at a caption's edges (before its voice, after it).
+        A pause between two of its own words is `pauses`' (0.35 s, bendable): 0.34-0.39 s used
+        to pass one and fail the other, with nothing to fix."""
+        S = self.S
+        cap = lambda a, b, text: self.cap({"a": a, "b": b, "text": text})
+        regions = [(1.0, 1.8), (2.16, 3.0), (3.6, 5.0)]
+        self.assertEqual(S.caption_stray([cap(1.0, 3.0, "I think so")], regions), [], "0.36 s between its words")
+        self.assertEqual(S.caption_stray([cap(1.0, 3.2, "I think so")], [(1.0, 1.5), (2.5, 3.0)]), [],
+                         "a held pause (pauses fails it, or it holds an exception): the caption waits with it")
+        # left up after its words until the next caption's voice starts: still stray
+        bad = S.caption_stray([cap(2.2, 3.65, "think so")], regions)
+        self.assertIn("stays up through 0.65s of nobody speaking", bad[0][0])
 
     def test_safe_zone_is_top_bottom_left_and_right(self):
         S = self.S

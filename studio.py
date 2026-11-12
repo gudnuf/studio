@@ -2462,23 +2462,45 @@ def caption_chunks(words, segments, start, end, pace=1.0, rule=CAPTION_RULE):
     return [{"a": r3(x["a"]), "b": r3(x["b"]), "text": " ".join(w["w"] for w in x["g"])} for x in its]
 
 GATE_LEAD = 0.05     # a caption gated to speech appears this long before the voice
+GATE_EARLY = 0.15    # or, to stay CAP_MIN on screen, at most this long before it (`caption stray`
+                     #   allows 0.20 s on the export's own VAD, which hears edges +-0.04 s)
 GATE_HOLD = 0.2      # and stays this long after it stops (never under CAP_MIN on screen)
 
-def caption_gate(chunks, spans):
+def caption_gate(chunks, spans, end=None):
     """Chunks (clip time) held to the speech that is really there. spans: the clip's speech on
     the same clock (part_speech: the media's VAD, not whisper's word times, which run early).
     A chunk that would appear in silence waits for the voice (GATE_LEAD before it); one whose
-    words are over and followed by silence goes GATE_HOLD after them. A chunk with no speech
-    under it at all is left as it is (`check` calls it stray). No spans: nothing changes."""
+    words are over and followed by silence goes GATE_HOLD after them. When the voice comes so
+    late that the chunk couldn't show for CAP_MIN without appearing more than GATE_EARLY before
+    it, the chunk joins the next one; the last chunk holds a little longer instead (to `end`,
+    the clip's length, at most), or joins the one before when the voice hardly stopped between
+    them. So nothing this returns starts further before the voice than `check` allows. A chunk
+    with no speech under it at all is left as it is (`check` calls it stray: a word the clip's
+    edge cuts, which a trim fixes). No spans: nothing changes."""
     if not spans:
         return chunks
-    out = []
-    for c in chunks:
+    out, todo = [], list(chunks)
+    while todo:
+        c = todo.pop(0)
         a, b = c["a"], c["b"]
         if not any(r0 - GATE_LEAD <= a < r1 for r0, r1 in spans):
             nxt = min((r0 for r0, r1 in spans if a < r0 < b), default=None)
             if nxt is not None:
-                a = max(a, min(nxt - GATE_LEAD, b - CAP_MIN))
+                wait = lambda b: max(a, nxt - GATE_EARLY, min(nxt - GATE_LEAD, b - CAP_MIN))
+                if b - wait(b) < CAP_MIN - 1e-9:
+                    if todo:
+                        n = todo.pop(0)
+                        todo.insert(0, {**n, "a": max(a, nxt - GATE_LEAD), "text": c["text"] + " " + n["text"]})
+                        continue
+                    hold = max(b, min(max(a, nxt - GATE_LEAD) + CAP_MIN, end if end is not None else math.inf))
+                    said = max((r1 for r0, r1 in spans if r1 <= nxt), default=None)
+                    if hold - wait(hold) < CAP_MIN - 1e-9 and out and said is not None \
+                            and said > out[-1]["a"] and nxt - said < CAP_QUIET:
+                        p = out.pop()
+                        todo.insert(0, {**p, "b": b, "text": p["text"] + " " + c["text"]})
+                        continue
+                    b = hold
+                a = wait(b)
         # speech that only starts in the chunk's last tenth of a second is the next chunk's
         ends = [r1 for r0, r1 in spans if r0 < b - 0.1 and r1 > a]
         if ends and max(ends) < b:
@@ -2493,8 +2515,9 @@ def clip_captions(item, a, b, pace=1.0, rule=CAPTION_RULE):
     chunks = paced(caption_chunks(tr.get("words", []), tr.get("segments"), a, b, pace, rule), pace)
     if rule < 2:
         return chunks
-    return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, speech_regions(item["id"]) or [],
-                                            (b - a) / pace * FPS))
+    n = frames_of((b - a) / pace)
+    return caption_gate(chunks, part_speech({"in": a, "out": b, "pace": pace}, speech_regions(item["id"]) or [], n),
+                        n / FPS)
 
 def captions(words, start, end, path, w=1080, h=1920, segments=None):
     """Burn-in captions (ASS): caption_chunks(), big and centred low — the vertical idiom."""
@@ -3579,8 +3602,11 @@ def caption_stray(caps, regions):
             nxt = min((r0 for r0, _ in regions if r0 > a), default=None)
             why.append(f"appears {nxt - a:.2f}s before the voice (want <= {CAP_ONSET:.2f}s)" if nxt is not None and nxt < b
                        else "appears where nobody is speaking")
-        edges = [a] + [x for r in regions if r[1] > a and r[0] < b for x in (max(a, r[0]), min(b, r[1]))] + [b]
-        q0, q1 = max(zip(edges[::2], edges[1::2]), key=lambda g: g[1] - g[0])
+        # the quiet after its words (a voice that only starts in its last tenth of a second is
+        # the next caption's). A pause between two of its own words is `pauses`' to judge.
+        mine = [r for r in regions if r[1] > a and r[0] < b]
+        mine = [r for r in mine if r[0] < b - 0.1] or mine
+        q0, q1 = (min(b, mine[-1][1]) if mine else a), b
         if q1 - q0 >= CAP_QUIET + CHECK_PAUSE_TOL:
             why.append(f"stays up through {q1 - q0:.2f}s of nobody speaking ({q0:.2f}-{q1:.2f}s; want < {CAP_QUIET}s)")
         if why:
