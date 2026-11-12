@@ -36,7 +36,7 @@ Every note the operator leaves that names a defect becomes a rule here (see the 
 | No click at a cut (`click`) | no sample step at a sound cut 6x the steps around it (and ≥ 0.02 full scale) |
 | Every frame on the grid (`held`) | every frame lasts exactly 1/30 s (renders are frame-exact; none is held at a cut) |
 | Captions match the audio | the export, re-transcribed, says what the captions say |
-| Every caption is with its words (`caption stray`) | caption by caption, not a ratio: it appears in speech, or at most 0.20 s before the voice starts; it never stays up through 0.3 s of nobody speaking; it is never on screen for under 0.4 s |
+| Every caption is with its words (`caption stray`) | caption by caption, not a ratio: it appears in speech, or at most 0.20 s before the voice starts; it never stays up 0.3 s after its words with nobody speaking; it is never on screen for under 0.4 s. A pause between two of its own words is judged by the pause rule above, once |
 | Captions stay clear of platform UI (`safe zone`) | nothing in the top 14%, the bottom 20%, the left 6% or the right 15% of a 9:16 frame, measured on the captions as they are drawn |
 | Ending | the last spoken word is complete and is not filler ("yeah", "so", "um") |
 
@@ -47,19 +47,28 @@ first caption that names the brand, or the first picture from footage with no so
 (a screen recording, an insert made for the picture), whichever comes first; it can't see a
 phone filmed in someone's hand, so read the warning, don't obey it blindly.
 
-The render does its part, so three of these pass at the source:
+The render does its part, so three of these pass at the source. The principle: a render never
+makes something a rule that can't be bent would fail, with no verb to fix it.
 
-- **Levels.** Before the master loudness pass, every spoken clip's speech is brought to one
-  level; a clip nobody speaks in (natural sound) gets the median of those gains, so it keeps
-  its place against the voices.
-- **Tone.** A clip with no sound of its own (a card, a silent insert as its own clip) gets room
-  tone from the nearest clip that has sound: that shot's own tail when its source runs on
-  without words, else its longest stretch between words, laid 20–34 dB under the voices. A
-  card whose file carries its own sound keeps it.
+- **Levels.** Every spoken clip's speech is brought to one level; a clip nobody speaks in
+  (natural sound) gets the median of those gains (the upper of the two middle ones when the
+  count is even), so it keeps its place against the voices. A gain past a clip's headroom is
+  limited, never clipped. The master after it is one gain for the whole reel and a true-peak
+  limiter: it never rides the level, so the levels set here are the export's.
+- **Tone.** The joined sound is measured the way `dead air` measures the export (with a
+  margin: 3 dB, 0.1 s), and every clip a silent stretch touches gets room tone mixed under its
+  own sound: a card, a silent or sparse insert, a voice in a room so quiet its pauses drop out
+  (two snapped cuts leave 0.33 s of room). A spoken clip gives its own room; any other takes
+  the nearest clip's: that shot's own tail when its source runs on without words, else its
+  longest stretch between words, laid 20–34 dB under the voices. A donor whose tone is itself
+  silent is passed over for the next; when no clip has any, a faint noise floor stands in, and
+  the render says so. Sound that never drops out is left alone.
 - **Captions.** A caption never shows for under 0.4 s: a word of the sentence before or after
   that the clip's edge cuts through is dropped, any other short caption joins its neighbour.
   Each caption is held to the speech the VAD hears (it waits for the voice, and goes 0.2 s
-  after it stops), and captions wrap inside the middle 70% of the width.
+  after it stops); one the wait would leave under 0.4 s joins the next caption instead of
+  appearing early (the last one holds a little longer, or joins the one before). Captions
+  wrap inside the middle 70% of the width.
 It finds the cut rules' findings in the export's own pixels (the caption band masked) and sound, at
 the timeline's cuts, and puts nine numbered frames around each one on the review sheet
 (`jump-f00283.png`, ...).

@@ -247,13 +247,15 @@ complete beats (and may pick none). Three things hold the hard rules:
   them snapped, and `--snap` (add, trim, set) or `timeline snap P CLIP|all` does it for any
   clip. A clip with no speech in it (a silent shot) is left alone, and the operator's own
   trims in the UI are never snapped. Every part of an export gets a 20 ms audio fade in and
-  out, so cuts don't click, and `render` normalizes loudness to −14 LUFS, true peak −1 dBTP
-  (two-pass `loudnorm`, video copied).
+  out, so cuts don't click, and `render` brings the reel to −14 LUFS, true peak −1 dBTP, with
+  one gain for the whole reel (measured, then applied) and a true-peak limiter for the peaks
+  that gain would put over; video copied. Nothing in the master follows the programme's level,
+  so the levels set clip by clip are the levels in the export.
 - **Frame-exact renders.** Every clip is a whole number of 30 fps frames (its length rounded
   once), and so is every cover stretch inside it. Each part is rendered as exactly that many
   frames from its first frame at 0, with PCM sound of exactly frames × 1600 samples (48 kHz), no
   metadata and no timecode track; the parts then join with the concat demuxer as they are
-  (`concat: copy` in `render.done`) and the export's AAC is encoded once, by `loudnorm`. So no
+  (`concat: copy` in `render.done`) and the export's AAC is encoded once, by the master. So no
   frame is held at a cut, every cut lands on its frame, and a cut's first frame is a clean key
   frame. If a part's stream ever differs (e.g. VideoToolbox fell back to software), the join is
   re-encoded with a key frame forced on every part's first frame (`concat: reencode`).
@@ -280,7 +282,7 @@ cut between two moments of the same footage with nothing hiding it (`jump`), spe
 right at a sound cut (`fragment`), a click (`click`), a frame off the 30 fps grid (`held`), and,
 as a warning only, a picture that changes again the frame after a cut (`soft`); captions against a fresh
 transcription of the export (≥ 80% of words agree), each caption against the export's speech
-(`caption stray`: in speech or ≤ 0.20 s before it, never up through 0.3 s of silence, never on
+(`caption stray`: in speech or ≤ 0.20 s before it, never up 0.3 s after its words in silence, never on
 screen under 0.4 s) and against the platform's UI (`safe zone`: drawn by libass on black and
 measured with `bbox`), how soon the product shows (`product late`, a warning), and the last word (not filler). A clip nobody speaks in (b-roll,
 a cartoon, a card) is picture: never a pause. A rule broken on purpose needs an exception,
@@ -317,9 +319,13 @@ say which is newer); their sizes are still the exports' sizes, so don't look the
 
 Fades are made by construction (not measured). Before the master loudness pass the render
 brings every spoken clip's speech to one level (`level_parts`: speech-gated `ebur128` per part,
-one gain per part, natural-sound clips at the median gain) and lays room tone under a clip with
-no sound of its own (from the nearest clip with sound; `STUDIO_LEVEL=0` turns both off); the
-parts keep their frames and their 1600 samples a frame.
+one gain per part, natural-sound clips at the median gain; a gain past a part's headroom is
+limited, never clipped). Then it measures the joined sound the way `dead air` does, at the
+master's gain and with a margin (3 dB, 0.1 s), and mixes room tone under every part a silent
+stretch touches (`lay_tone`): a spoken clip's own room, else the nearest clip's, passing over
+a donor whose tone is itself silent; a faint noise floor when no clip has any. So a render
+never makes `dead air`. `STUDIO_LEVEL=0` turns levelling and tone off; the parts keep their
+frames and their 1600 samples a frame.
 
 ## Cover, voice, pace and tightening
 

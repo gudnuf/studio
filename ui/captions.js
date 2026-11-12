@@ -8,7 +8,8 @@
 // a word of the sentence before or after that the clip's edge cuts through is dropped, and any
 // other short chunk joins the one before it (when it ends a phrase, or is the last) or the one
 // after. (The export also holds each chunk to the speech the VAD hears, studio.py caption_gate:
-// at most a few tenths of a second later or shorter than this preview.)
+// at most a few tenths of a second later or shorter than this preview, and now and then two of
+// these chunks shown as one, when the voice comes too late for the first to be read alone.)
 
 export const CAP_WORDS = 3;
 export const CAP_MIN = 0.4;   // no caption shows for less (QUALITY.md `caption stray`)

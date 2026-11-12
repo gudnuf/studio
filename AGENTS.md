@@ -176,27 +176,36 @@ reel and a declared card aren't judged.
 
 ## Sound: levels, tone, silence
 
-You don't set levels. `render` brings every spoken clip's speech to one level before the master
-loudness pass, and a clip nobody speaks in rides along at the same gain as the median voice; it
-says so when the voices were more than 1 dB apart. `check` fails `level step` when a spoken
-clip's speech is still more than 2 LU from the median clip's (a clip with under half a second
-of speech can't be levelled; give it more, or drop it).
+You don't set levels. `render` brings every spoken clip's speech to one level, and a clip
+nobody speaks in rides along at the same gain as the median voice; it says so when the voices
+were more than 1 dB apart. The master after it is one gain for the whole reel (and a limiter
+for the peaks), so those levels are the export's. `check` fails `level step` when a spoken
+clip's speech is more than 2 LU from the median clip's: an export from before levelling. (A
+clip with under half a second of speech can't be measured: it rides the median gain, and
+`level step` leaves it out.)
 
-Nothing in a reel is ever silent: `check` fails `dead air` on more than 0.3 s under −60 dBFS. A
-clip with no sound of its own (an end card, a silent insert used as its own clip) gets room
-tone from the clip before it (its own tail if the source runs on without words, else its
-longest stretch between words), low; `render` says which clip it took it from. To choose the
-tone yourself, give the card its own sound when you make the file (derived media): a card that
-has sound keeps it. A cover piece never needs tone: the clip's sound runs under it.
+Nothing in a reel is ever silent: `check` fails `dead air` on more than 0.3 s under −60 dBFS,
+and `render` never makes it. Any clip the silence would touch gets room tone mixed under its
+own sound, low: an end card or a silent insert, an insert whose sound is sparse, a voice in a
+room so quiet its pauses drop out. A spoken clip gives its own room; any other takes it from
+the clip before it (its tail if the source runs on without words, else its longest stretch
+between words), or the next clip that has some; `render` says which, and says so when no clip
+had any and a faint noise floor stands in. To choose the tone yourself, give the card its own
+sound when you make the file (derived media): sound that never drops out is left alone. A
+cover piece never needs tone: the clip's sound runs under it. So a `dead air` failure means an
+old export: render again.
 
 ## Captions
 
 Captions come from the words, three at a time. Two things keep each one with its words: no
 caption shows for under 0.4 s (a word from the sentence before or after that the clip's edge
 cuts through is dropped; any other short caption joins its neighbour), and the export holds
-each caption to the speech the VAD hears. `check` fails `caption stray` on a caption that
-still isn't with its words (it names the caption and the clip): trim the clip so the stray
-word is out, or fix the word (`words --fix`). Captions wrap inside the middle 70% of
+each caption to the speech the VAD hears: it waits for the voice, and when that leaves it too
+short to read it joins the next caption rather than appear early. `check` fails `caption
+stray` on a caption that still isn't with its words (it names the caption and the clip): a
+word the clip's edge cuts into. Trim the clip so the stray word is out, or fix the word
+(`words --fix`), then render again. A pause between a caption's own words is `pauses`' to
+judge, not `caption stray`'s. Captions wrap inside the middle 70% of
 the width; `safe zone` fails one that reaches the top 14%, bottom 20%, left 6% or right 15%.
 `product late` is a warning, not a failure: nothing shows or names the product in the first 8 s.
 
