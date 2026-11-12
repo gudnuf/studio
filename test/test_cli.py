@@ -1208,6 +1208,21 @@ class Quality(unittest.TestCase):
         self.assertEqual(r.returncode, 0 if res["ok"] else 1, "exit code follows the hard rules")
         return res, {x["rule"]: x for x in res["rules"]}
 
+    def toned(self, gain=0, name="bursts-tone.mov"):
+        """bursts.mov over a real room's tone (its own is so faint that every pause and tail in
+        it is dead air), `gain` dB louder; ingested once. Returns its media id."""
+        import subprocess
+        ids = {it["name"]: m for m, it in self.S.state()["media"].items()}
+        if name not in ids:
+            work = H.new_home("tone-src")
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(self.fx / "bursts.mov"), "-f", "lavfi",
+                            "-i", "anoisesrc=color=pink:amplitude=0.02:sample_rate=48000", "-filter_complex",
+                            f"[0:a][1:a]amix=inputs=2:duration=first:normalize=0,volume={gain}dB[a]", "-map", "0:v",
+                            "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", str(work / name)], check=True)
+            H.cli(self.home, "ingest", "-p", "q", settled(work / name))
+            ids = {it["name"]: m for m, it in self.S.state()["media"].items()}
+        return ids[name]
+
     def render_clip(self, name, a, b, snap=True, media=None):
         slug = self.project(name)
         H.cli(self.home, "timeline", "add", slug, media or self.b, a, b, *(["--snap"] if snap else []))
@@ -1425,7 +1440,97 @@ class Quality(unittest.TestCase):
             (d / "transcript.json").write_text(saved)
         self.assertEqual(r["captions"]["status"], "fail", r["captions"])
         self.assertEqual(r["cuts"]["status"], "pass", "no speech: nothing to cut into")
+        self.assertEqual(r["caption stray"]["status"], "fail", r["caption stray"])
+        self.assertTrue(all("appears where nobody is speaking" in i for i in r["caption stray"]["items"]), r["caption stray"])
 
+
+    # ---- levelling, tone under a silent clip, and the rules that watch them ----
+    def test_levelling_tone_and_the_rules_that_watch_them(self):
+        """One story, rendered twice. Two voices 14 dB apart, a 0.6 s shot between them and a
+        silent card at the end: the render levels the voices and lays room tone under the card
+        (frames and samples untouched), and check passes `level step` and `dead air`, fails
+        `blip` until it's excepted. The same story with levelling off fails both."""
+        import subprocess
+        regs = self.known["speech"]
+        work = H.new_home("level-src")
+        ff = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+        subprocess.run(ff + ["-f", "lavfi", "-i", "color=c=0x202020:s=1080x1920:r=30:d=3", "-f", "lavfi", "-i",
+                             "anullsrc=r=48000:cl=stereo", "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                             "-pix_fmt", "yuv420p", "-c:a", "aac", str(work / "card.mp4")], check=True)
+        H.cli(self.home, "ingest", "-p", "q", settled(work / "card.mp4"))
+        card = {it["name"]: m for m, it in self.S.state()["media"].items()}["card.mp4"]
+        loud, quiet = self.toned(), self.toned(-14, "quiet-voice.mov")
+        slug = self.project("Levels")
+        H.cli(self.home, "timeline", "add", slug, loud, regs[0][0] - 0.3, regs[0][1] + 0.3, "--snap")
+        H.cli(self.home, "timeline", "add", slug, self.r, 1.0, 1.6)
+        H.cli(self.home, "timeline", "add", slug, quiet, regs[1][0] - 0.3, regs[1][1] + 0.3, "--snap")
+        H.cli(self.home, "timeline", "add", slug, card, 0.0, 2.5)
+        clips = self.clips(slug)
+
+        r = H.cli(self.home, "render", slug, timeout=900)
+        self.assertIn("levelled 2 spoken clips to one speech level", r.stderr)
+        self.assertIn("clip 4 has no sound of its own: room tone from clip 3 under it", r.stderr)
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]["data"]
+        lv = ev["level"]
+        self.assertEqual([x["clip"] for x in lv], [c["id"] for c in clips])
+        self.assertGreater(lv[2]["gain"] - lv[0]["gain"], 3.0, "the quiet voice comes up (it is 14 dB under at the "
+                           "source; the voice chain's compressor has already closed some of that)")
+        self.assertNotIn("speech", lv[1])
+        self.assertEqual(lv[1]["gain"], sorted([lv[0]["gain"], lv[2]["gain"]])[1], "natural sound rides the median")
+        self.assertEqual(lv[3]["tone"], clips[2]["id"])
+        final = self.home / ev["file"]
+        frames = sum(self.S.clip_frames(c) for c in clips)
+        n = int(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+                                "stream=nb_read_frames", "-of", "csv=p=0", str(final)], capture_output=True,
+                               text=True, check=True).stdout.strip().strip(","))
+        self.assertEqual(n, frames, "levelling and tone touch the sound only: every frame is still there")
+        self.assertEqual(ev["concat"], "copy")
+        res, rules = self.check(slug)
+        # (a warning at most: 2.5 s of low tone in a 9 s reel is a wide loudness range)
+        self.assertIn(rules["level step"]["status"], ("pass", "warn"), rules["level step"])
+        self.assertIn("2 spoken clips within 0.", rules["level step"]["detail"])
+        self.assertEqual(rules["dead air"]["status"], "pass", rules["dead air"])
+        self.assertEqual(rules["held"]["status"], "pass", rules["held"])
+        self.assertEqual(rules["loudness"]["status"], "pass", rules["loudness"])
+        self.assertEqual(rules["caption stray"]["status"], "pass", rules["caption stray"])
+        self.assertEqual(rules["safe zone"]["status"], "pass", rules["safe zone"])
+        self.assertEqual(rules["product late"]["status"], "warn", "nothing names the product: a warning, never a failure")
+        self.assertEqual(rules["blip"]["status"], "fail", rules["blip"])
+        self.assertIn("(clip 2): a 0.60s shot between two picture changes", rules["blip"]["items"][0])
+        self.assertEqual([f["clip"] for f in H.events(self.home)[-1]["data"]["failures"] if f["rule"] == "blip"],
+                         [clips[1]["id"]])
+        H.cli(self.home, "exception", "grant", slug, "blip", "2", "--why", "a flash of the yard, meant as a beat")
+        res, rules = self.check(slug)
+        self.assertEqual(rules["blip"]["status"], "excepted", rules["blip"])
+        r = H.cli(self.home, "exception", "grant", slug, "dead air", "--why", "silence is golden here", check=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("can't be excepted", r.stderr)
+
+        # the same story with levelling off: what renders were before
+        H.cli(self.home, "render", slug, timeout=900, env={**H.env_for(self.home), "STUDIO_LEVEL": "0"})
+        ev = [e for e in H.events(self.home) if e["type"] == "render.done" and e["data"]["project"] == slug][-1]["data"]
+        self.assertNotIn("level", ev)
+        res, rules = self.check(slug)
+        self.assertEqual(rules["level step"]["status"], "fail", rules["level step"])
+        self.assertTrue(any(i.startswith("clip ") and " LU " in i for i in rules["level step"]["items"]), rules["level step"])
+        self.assertEqual(rules["dead air"]["status"], "fail", rules["dead air"])
+        self.assertIn("(clip 4)", rules["dead air"]["items"][0])
+        self.assertIn("dead air", res["failed"])
+        self.assertIn("level step", res["failed"])
+
+    def test_captions_are_drawn_inside_the_safe_zone(self):
+        """The burned captions, measured as libass draws them: a long one wraps instead of
+        running under the buttons on the right."""
+        caps = [{"a": 0, "b": 1, "text": t, "clip": 1, "id": "c"} for t in
+                ("Hi.", "working professional who", "extraordinarily comprehensive documentation")]
+        work = Path(tempfile.mkdtemp(dir=H.tmp_root()))
+        boxes = self.S.caption_boxes(caps, 1080, 1920, work)
+        self.assertTrue(all(boxes), boxes)
+        self.assertEqual(self.S.safe_zone(caps, boxes, 1080, 1920), [])
+        self.assertLess(boxes[0][2] - boxes[0][0], 300)
+        self.assertGreater(boxes[1][3] - boxes[1][1], 1.6 * (boxes[0][3] - boxes[0][1]), "three long words: two lines")
+        for x0, y0, x1, y1 in boxes:
+            self.assertAlmostEqual((x0 + x1) / 2, 540, delta=12, msg="centred")
 
     # ---- speechless clips are picture; declared on-screen text; cards ----
     def test_a_clip_with_no_speech_is_picture_not_a_pause(self):
@@ -1447,9 +1552,12 @@ class Quality(unittest.TestCase):
         regs = self.known["speech"]
         slug = self.project("Cold open")
         # a 1.5s silent cold open, then two sentences with 0.9s of room tone (and 0.36s of black
-        # picture) between them, labelled the way the old magic-word path wanted
+        # picture) between them, labelled the way the old magic-word path wanted. The room tone
+        # is a real room's here (bursts.mov's own is so faint that the held pause is dead air,
+        # which no exception bends)
+        toned = self.toned()
         H.cli(self.home, "timeline", "add", slug, self.r, 0.5, 2.0)
-        H.cli(self.home, "timeline", "add", slug, self.b, regs[1][0] - 0.3, regs[2][1] + 0.3, "--snap")
+        H.cli(self.home, "timeline", "add", slug, toned, regs[1][0] - 0.3, regs[2][1] + 0.3, "--snap")
         H.cli(self.home, "timeline", "label", slug, "2", "payoff hold reveal still")
         c1, c2 = [c["id"] for c in self.clips(slug)]
         H.cli(self.home, "render", slug, timeout=900)
@@ -2590,6 +2698,167 @@ class CutRules(unittest.TestCase):
         fr[30][1] = 0.6
         found = self.rules(fr, [self.cut(30, "sound", spoken=(False, False))], s)
         self.assertEqual(found, [("click", 30)])
+
+
+class EasyRules(unittest.TestCase):
+    """The 2026-11-11 rules as pure functions (no ffmpeg): blip, dead air, caption stray, safe
+    zone, product late; and what makes them pass at the source: the caption rule's minimum,
+    the speech gate, where room tone comes from."""
+    LIB = {"spk": {"duration": 60.0, "has_video": True, "has_audio": True, "name": "spk"},
+           "b": {"duration": 9.0, "has_video": True, "has_audio": True, "name": "b"},
+           "scr": {"duration": 9.0, "has_video": True, "has_audio": False, "name": "screen.mp4"},
+           "card": {"duration": 3.0, "has_video": True, "has_audio": True, "name": "card.mp4"}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = H.import_studio(H.new_home("easy-rules"))
+
+    def tl(self, *clips):
+        return {"aspect": "9:16", "captions": True, "clips": list(clips)}
+
+    def test_blip_is_a_short_shot_between_two_picture_changes(self):
+        S = self.S
+        a = {"id": "a", "media": "spk", "in": 0.0, "out": 0.6}                  # 0.6 s, but it opens the reel
+        b = {"id": "b", "media": "spk", "in": 10.0, "out": 14.0,
+             "cover": [{"media": "b", "in": 0.0, "out": 0.6, "at": 11.0}]}      # a 0.6 s cover inside
+        c = {"id": "c", "media": "b", "in": 5.0, "out": 5.7}                     # 0.7 s between two clips
+        d = {"id": "d", "media": "card", "in": 0.0, "out": 0.5}                  # the last shot
+        shots = S.shot_list(self.tl(a, b, c, d), self.LIB)
+        self.assertEqual([(x["f0"], x["f1"], x["id"]) for x in shots],
+                         [(0, 18, "a"), (18, 48, "b"), (48, 66, "b"), (66, 138, "b"), (138, 159, "c"), (159, 174, "d")])
+        self.assertEqual([(x["f0"], x["id"]) for x in S.blips(shots)], [(48, "b"), (138, "c")],
+                         "never the first or the last shot")
+        self.assertEqual([x["f0"] for x in S.blips(shots, cards={"c"})], [48], "a declared card is never a blip")
+        # a pause cut in one take (the same moment either side) is one shot, not two
+        e = {"id": "e", "media": "spk", "in": 20.0, "out": 20.5}
+        f = {"id": "f", "media": "spk", "in": 20.5, "out": 23.0}
+        self.assertEqual(len(S.shot_list(self.tl(a, e, f, d), self.LIB)), 3)
+        self.assertIn("blip", S.EXCEPTABLE)
+        for rule in ("dead air", "level step", "caption stray", "safe zone", "product late"):
+            self.assertNotIn(rule, S.EXCEPTABLE, "a defect, never a choice")
+
+    def test_dead_air_is_silence_for_longer_than_0_3s(self):
+        import array, math
+        sr = 16000
+        tone = lambda secs, amp: [int(amp * math.sin(k * 0.3)) for k in range(int(secs * sr))]
+        quiet = 32768 * 10 ** (-66 / 20)          # room tone 6 dB under the line still counts as silence
+        loud = 32768 * 10 ** (-50 / 20)
+        s = array.array("h", tone(1.0, 3000) + [0] * int(0.28 * sr) + tone(1.0, loud * 1.4) + [0] * int(0.5 * sr)
+                        + tone(0.5, 3000) + tone(0.6, quiet * 1.4) + tone(0.3, 3000))
+        self.assertEqual(self.S.dead_air(s, sr), [(2.28, 2.78), (3.28, 3.88)])
+        self.assertEqual(self.S.dead_air(array.array("h", tone(2.0, loud * 1.4)), sr), [], "-50 dBFS tone is sound")
+        self.assertEqual(self.S.dead_air(array.array("h", [0] * sr), sr), [(0.0, 1.0)], "to the very end")
+
+    def test_caption_stray_judges_each_caption(self):
+        cap = lambda a, b, text, k=1: {"a": a, "b": b, "text": text, "clip": k, "id": f"c{k}",
+                                       "frames": round((b - a) * 30)}
+        regions = [(0.1, 2.0), (2.6, 5.0), (8.0, 9.0)]
+        caps = [cap(0.1, 1.0, "It was in"),             # in speech
+                cap(1.0, 2.5, "my pocket."),            # 0.5 s of nobody speaking after it: stays up
+                cap(2.45, 3.2, "And from"),             # 0.15 s before the voice: fine
+                cap(3.2, 3.33, "Whereas this"),         # 4 frames
+                cap(5.4, 6.0, "ghost"),                 # nobody speaking at all
+                cap(7.7, 8.6, "a day using")]           # 0.3 s before the voice
+        bad = self.S.caption_stray(caps, regions)
+        self.assertEqual([c for _, c in bad], ["c1"] * 4)
+        text = "\n".join(t for t, _ in bad)
+        self.assertIn("'my pocket.' (clip 1): stays up through 0.50s of nobody speaking", text)
+        self.assertIn("'Whereas this' (clip 1): on screen for 0.13s", text)
+        self.assertIn("'ghost' (clip 1): appears where nobody is speaking", text)
+        self.assertIn("'a day using' (clip 1): appears 0.30s before the voice", text)
+        self.assertNotIn("It was in", text)
+        self.assertNotIn("And from", text)
+        self.assertEqual(self.S.caption_stray(caps[:1] + caps[2:3], regions), [])
+
+    def test_caption_chunks_never_show_for_under_0_4s(self):
+        W = lambda *ws: [{"w": w, "start": a, "end": b} for w, a, b in ws]
+        S = self.S
+        # the tail of the sentence before (ends 0.03 s into the clip) and the first words of the
+        # one after (whisper times run early): dropped, not flashed
+        words = W(("bearings.", 9.6, 10.03), ("It's", 10.1, 10.3), ("going", 10.3, 10.5), ("to", 10.5, 10.6),
+                  ("cost", 10.6, 11.0), ("money.", 11.0, 11.6), ("Whereas", 11.87, 12.1), ("this", 12.1, 12.3))
+        ch = S.caption_chunks(words, [], 10.0, 12.0)
+        self.assertEqual([c["text"] for c in ch], ["It's going to", "cost money."])
+        # a short chunk that ends a phrase joins the one before; one that starts a phrase, the one after
+        words = W(("all", 0.0, 0.3), ("of", 0.3, 0.5), ("my", 0.5, 0.8), ("cost", 0.8, 1.1), ("items,", 1.1, 1.4),
+                  ("But", 1.4, 1.6), ("with", 1.6, 1.9), ("Jefe", 1.9, 2.3), ("I", 2.3, 2.4), ("walk.", 2.4, 2.9))
+        ch = S.caption_chunks(words, [{"start": 0.0}, {"start": 1.4}, {"start": 1.6}], 0.0, 4.0)
+        self.assertEqual([c["text"] for c in ch], ["all of my", "cost items,", "But with Jefe I", "walk."])
+        self.assertTrue(all(c["b"] - c["a"] >= 0.4 - 1e-9 for c in ch), ch)
+        self.assertEqual((ch[1]["a"], ch[1]["b"], ch[2]["a"]), (0.8, 1.4, 1.4))
+        # the last chunk holds 0.4 s; a lone short chunk is kept
+        self.assertEqual(S.caption_chunks(W(("Yes.", 1.0, 1.1)), [], 0.0, 3.0), [{"a": 1.0, "b": 1.4, "text": "Yes."}])
+        # the minimum is on the export's clock: at pace 1.2 a 0.45 s chunk shows for 0.375 s
+        words = W(("one", 0.0, 0.5), ("two", 0.5, 1.0), ("three,", 1.0, 1.5), ("four,", 1.5, 1.95), ("five", 1.95, 2.6))
+        self.assertEqual([c["text"] for c in S.caption_chunks(words, [], 0.0, 3.0)],
+                         ["one two three,", "four,", "five"])
+        self.assertEqual([c["text"] for c in S.caption_chunks(words, [], 0.0, 3.0, 1.2)],
+                         ["one two three, four,", "five"])
+
+    def test_caption_gate_holds_chunks_to_the_speech(self):
+        S = self.S
+        spans = [(0.1, 2.0), (2.6, 5.0)]
+        ch = [{"a": 0.1, "b": 1.0, "text": "one"},       # in speech: untouched
+              {"a": 1.0, "b": 2.3, "text": "two"},       # the words end at 2.0; 0.3 s of silence after
+              {"a": 2.3, "b": 3.4, "text": "three"},     # whisper put it 0.3 s before the voice
+              {"a": 3.4, "b": 4.0, "text": "four"},
+              {"a": 6.0, "b": 7.0, "text": "nobody"}]    # no speech under it: left for check to call stray
+        out = S.caption_gate(ch, spans)
+        self.assertIs(out[0], ch[0])
+        self.assertEqual((out[1]["a"], out[1]["b"]), (1.0, 2.2))
+        self.assertEqual((out[2]["a"], out[2]["b"]), (2.55, 3.4))
+        self.assertIs(out[3], ch[3])
+        self.assertIs(out[4], ch[4])
+        self.assertEqual(S.caption_stray([{**c, "clip": 1, "id": "x", "frames": round((c["b"] - c["a"]) * 30)}
+                                          for c in out[:4]], spans), [])
+        self.assertIs(S.caption_gate(ch, []), ch, "no speech known: nothing changes")
+        # gating never leaves a chunk under 0.4 s on screen
+        g = S.caption_gate([{"a": 2.0, "b": 2.9, "text": "late"}], [(2.8, 4.0)])[0]
+        self.assertEqual((g["a"], g["b"]), (2.5, 2.9))
+
+    def test_safe_zone_is_top_bottom_left_and_right(self):
+        S = self.S
+        caps = [{"a": k, "b": k + 1, "text": t, "clip": 1, "id": "c"} for k, t in enumerate("abcdef")]
+        boxes = [(200, 1300, 880, 1400),      # where captions sit: clear
+                 (200, 250, 880, 350),        # top 14% is 269 px
+                 (200, 1450, 880, 1540),      # bottom 20% starts at 1536
+                 (60, 1300, 700, 1400),       # left 6% is 65 px
+                 (300, 1300, 930, 1400),      # right 15% starts at 918
+                 None]                        # nothing drawn
+        bad = [t for t, _ in S.safe_zone(caps, boxes, 1080, 1920)]
+        self.assertEqual(len(bad), 4, bad)
+        for line, side in zip(bad, ("top 14% (by 19px)", "bottom 20% (by 4px)", "left 6% (by 5px)", "right 15% (by 12px)")):
+            self.assertIn(side, line)
+
+    def test_product_first_is_a_caption_naming_it_or_a_silent_insert(self):
+        S = self.S
+        mk = lambda id_, at, **kw: {"id": id_, "media": "spk", "in": 0.0, "out": 5.0, "at": at, **kw}
+        clips = [mk("a", 0.0), mk("b", 5.0, cover=[{"media": "scr", "in": 0.0, "out": 2.0, "at": 1.0}]),
+                 {"id": "k", "media": "scr", "in": 0.0, "out": 3.0, "at": 10.0}]
+        caps = [{"a": 0.5, "b": 1.0, "text": "hours on the"}, {"a": 8.2, "b": 9.0, "text": "With Jefe, we"}]
+        self.assertEqual(S.product_first(caps, clips, self.LIB, "jefe"), (6.0, "an insert, screen.mp4"))
+        self.assertEqual(S.product_first(caps, clips[:1], self.LIB, "jefe"), (8.2, "a caption says Jefe"))
+        self.assertIsNone(S.product_first(caps[:1], clips[:1], self.LIB, "jefe"))
+        self.assertEqual(S.product_first([], clips[2:], self.LIB, "jefe")[0], 10.0)
+        self.assertIsNone(S.product_first([], clips[2:], self.LIB, "jefe", cards={"k"}), "a card is not an insert")
+
+    def test_room_tone_comes_from_the_tail_or_the_longest_gap(self):
+        S = self.S
+        it = {"duration": 30.0}
+        regs = [[2.0, 5.0], [5.4, 9.0], [13.0, 20.0]]
+        # the clip ends on a word and the source goes quiet for 4 s: its own tail
+        self.assertEqual(S.tone_span({"in": 5.3, "out": 9.3}, it, regs, need=2.5), (9.3, 12.85))
+        # the next word comes 0.4 s later: the longest stretch between words instead
+        self.assertEqual(S.tone_span({"in": 2.0, "out": 5.2}, it, regs, need=2.5), (20.15, 30.0))
+        # a clip nobody speaks in, the source running on: the tail
+        self.assertEqual(S.tone_span({"in": 0.0, "out": 3.0}, {"duration": 10.0}, [], need=3.0), (3.0, 10.0))
+        # taken for a clip before it (no tail): the longest gap; words wall to wall: nothing
+        self.assertEqual(S.tone_span({"in": 5.3, "out": 9.3}, it, regs, after=False), (20.15, 30.0))
+        self.assertIsNone(S.tone_span({"in": 0.0, "out": 2.0}, {"duration": 2.2}, [[0.0, 2.2]]))
+
+    def test_part_speech_is_on_the_clips_own_clock(self):
+        c = {"in": 10.0, "out": 16.0, "pace": 1.2}
+        self.assertEqual(self.S.part_speech(c, [[8.0, 11.2], [12.4, 13.0], [15.99, 18.0]]), [(0.0, 1.0), (2.0, 2.5)])
 
 
 @unittest.skipUnless(H.have_tools(*NEEDS), "needs ffmpeg/ffprobe/whisper-cli (run in nix develop)")

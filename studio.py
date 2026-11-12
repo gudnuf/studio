@@ -365,6 +365,7 @@ EXCEPTABLE = {
     "jump": "a jump cut that is meant (time skipped on purpose, in plain sight)",
     "held": "a frame held on purpose (a freeze on the payoff)",
     "cover short": "a cover piece that stops early, the face coming back where it works",
+    "blip": "a shot under 1s that is meant (a flash cut the reel is built on, a deliberate punch)",
 }
 
 def rule_id(name):
@@ -3276,14 +3277,16 @@ def export_wav(path, out):
     return out
 
 def measure_loudness(path):
-    """(integrated LUFS, true peak dBTP) by ffmpeg's ebur128; None for either if unmeasurable."""
+    """(integrated LUFS, true peak dBTP, loudness range LU) by ffmpeg's ebur128; None for any
+    that's unmeasurable."""
     r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(path), "-vn",
                         "-af", "ebur128=peak=true", "-f", "null", "-"], capture_output=True, text=True)
     summary = r.stderr.rpartition("Summary:")[2]
     i = re.search(r"I:\s+(-?[\d.]+|-inf) LUFS", summary)
     tp = re.search(r"Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
+    lra = re.search(r"LRA:\s+(-?[\d.]+|-inf) LU", summary)
     f = lambda m: float(m.group(1)) if m and m.group(1) != "-inf" else None
-    return f(i), f(tp)
+    return f(i), f(tp), f(lra)
 
 # What the rendered cuts look and sound like (`check`'s cut rules), calibrated on four real
 # reels on 2026-11-09 (athanor projects/studio/tools/flash-detect.py has the calibration notes).
@@ -3486,6 +3489,155 @@ def cut_findings(frames, cuts=None, samples=None, sr=16000):
     out.sort(key=lambda x: (x["frame"], x["rule"]))
     return out
 
+# ---------- check: shots, silence, voice levels, the captions as shown --------------------
+# Six rules on what check already has: the frame plan (shots), the export's sound, its speech
+# (VAD) and the captions the render burned. Thresholds: athanor reels-craft-research-2026-11 §3.
+BLIP_FRAMES = FPS               # a shot between two picture changes shows for at least 1.0 s
+DEAD_DB, DEAD_SECS = -60.0, 0.3     # sound under -60 dBFS RMS for longer than this is dead air
+LEVEL_STEP = 2.0                # a spoken clip's speech-gated loudness, against the median clip's (LU)
+LEVEL_LRA = 6.0                 # the reel's loudness range: above this, a warning
+CAP_ONSET = 0.20                # a caption appears in speech, or at most this long before it starts
+CAP_QUIET = 0.3                 # a caption never stays up through this much of nobody speaking
+CAP_SHORT = 0.4                 # and is never on screen for less than this
+SAFE_ZONE = {"top": 0.14, "bottom": 0.20, "left": 0.06, "right": 0.15}   # platform UI, on 9:16
+PRODUCT_BY = 8.0                # the product is on screen (or named in a caption) by now
+
+def shot_list(tl, lib):
+    """The export's shots by the frame plan (cover_plan): [{f0, f1, clip, id}], in export frames;
+    clip (1-based) and id are the clip a shot starts in. Picture that runs on across a cut
+    (the same media, the same moment) is one shot."""
+    out, f, last = [], 0, None
+    for k, c in enumerate(tl.get("clips", []), 1):
+        for f0, f1, p, t0 in cover_plan(c, lib)[0]:
+            m, step = (p["media"], 1.0) if p else (c["media"], clip_pace(c))
+            if out and last[0] == m and abs(last[1] - t0) <= 1.5 / FPS:
+                out[-1]["f1"] = f + f1
+            else:
+                out.append({"f0": f + f0, "f1": f + f1, "clip": k, "id": c["id"]})
+            last = (m, t0 + (f1 - f0) / FPS * step)
+        f += clip_frames(c)
+    return out
+
+def blips(shots, cards=()):
+    """Shots too short to read: between two picture changes (so never the first or the last
+    shot) and under BLIP_FRAMES. cards: clip ids declared designed cards, never judged."""
+    return [x for x in shots[1:-1] if x["f1"] - x["f0"] < BLIP_FRAMES and x["id"] not in cards]
+
+def dead_air(samples, sr, db=DEAD_DB, secs=DEAD_SECS):
+    """[(start, end)]: every stretch longer than `secs` where the sound (16-bit mono samples)
+    stays under `db` dBFS RMS, in 20 ms windows."""
+    win = max(1, sr // 50)
+    under = (32768 * 10 ** (db / 20)) ** 2 * win
+    out, start, n = [], None, len(samples) // win
+    for k in range(n + 1):
+        quiet = k < n and sum(v * v for v in samples[k * win:(k + 1) * win]) < under
+        if quiet and start is None:
+            start = k
+        elif not quiet and start is not None:
+            if (k - start) * win / sr > secs + 1e-9:
+                out.append((round(start * win / sr, 2), round(k * win / sr, 2)))
+            start = None
+    return out
+
+def caption_plan(clips):
+    """Every caption the render burned, on the export's clock: [{a, b, text, clip, id, frames}].
+    clips: the clips as rendered, each with `at` (its first export second) and `frames`.
+    The same chunks the render draws (clip_captions, on the clip's paced clock); frames: how
+    many export frames it shows for (ASS times are whole centiseconds)."""
+    out = []
+    for k, c in enumerate(clips, 1):
+        n = c["frames"] / FPS
+        for ch in clip_captions({"id": c["media"]}, c["in"], c["out"], clip_pace(c)):
+            a, b = round(ch["a"], 2), min(round(ch["b"], 2), n)
+            shown = math.ceil(b * FPS - 1e-6) - math.ceil(a * FPS - 1e-6)
+            if shown > 0:
+                out.append({"a": round(c["at"] + a, 3), "b": round(c["at"] + b, 3), "text": ch["text"],
+                            "clip": k, "id": c["id"], "frames": shown})
+    return out
+
+def caption_stray(caps, regions):
+    """Captions that aren't with the words, one by one: [(what, clip id)]. regions: the export's
+    speech (VAD). A caption fails when it shows for under CAP_SHORT, appears more than
+    CAP_ONSET before speech starts (or after it ended), or stays through CAP_QUIET of nobody
+    speaking."""
+    regions = sorted(regions or [])
+    out = []
+    for c in caps:
+        a, b, why = c["a"], c["b"], []
+        if c["frames"] < round(CAP_SHORT * FPS) - 1:       # ASS times are centiseconds: a frame's grace
+            why.append(f"on screen for {c['frames'] / FPS:.2f}s (want >= {CAP_SHORT}s)")
+        if not any(r0 - CAP_ONSET - 1e-6 <= a <= r1 for r0, r1 in regions):
+            nxt = min((r0 for r0, _ in regions if r0 > a), default=None)
+            why.append(f"appears {nxt - a:.2f}s before the voice (want <= {CAP_ONSET:.2f}s)" if nxt is not None and nxt < b
+                       else "appears where nobody is speaking")
+        edges = [a] + [x for r in regions if r[1] > a and r[0] < b for x in (max(a, r[0]), min(b, r[1]))] + [b]
+        q0, q1 = max(zip(edges[::2], edges[1::2]), key=lambda g: g[1] - g[0])
+        if q1 - q0 >= CAP_QUIET + CHECK_PAUSE_TOL:
+            why.append(f"stays up through {q1 - q0:.2f}s of nobody speaking ({q0:.2f}-{q1:.2f}s; want < {CAP_QUIET}s)")
+        if why:
+            out.append((f"{a:.2f}s {c['text']!r} (clip {c['clip']}): " + "; ".join(why), c["id"]))
+    return out
+
+def caption_boxes(caps, w, h, work):
+    """Where each caption sits in the frame: [(x0, y0, x1, y1) or None], in pixels. Drawn by the
+    same ASS style and libass the render burns with, one caption a frame on black, measured by
+    ffmpeg's bbox (plus the outline, which is black)."""
+    if not caps:
+        return []
+    ass = Path(work) / ".boxes.ass"
+    write_ass([{"a": k / 10, "b": (k + 1) / 10, "text": c["text"]} for k, c in enumerate(caps)], ass, w, h)
+    try:
+        r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-f", "lavfi", "-i",
+                            f"color=c=black:s={w}x{h}:r=10:d={len(caps) / 10:.1f}", "-vf",
+                            f"subtitles={ass.name}:fontsdir=/System/Library/Fonts,bbox=min_val=40",
+                            "-frames:v", str(len(caps)), "-f", "null", "-"],
+                           capture_output=True, text=True, cwd=work)
+    finally:
+        ass.unlink(missing_ok=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed ({r.returncode}):\n{r.stderr[-1500:]}")
+    pad = max(3, round(min(w, h) * 0.08) // 14)
+    out = [None] * len(caps)
+    for m in re.finditer(r"n:(\d+) pts:\S+ pts_time:\S+ x1:(\d+) x2:(\d+) y1:(\d+) y2:(\d+)", r.stderr):
+        k, x1, x2, y1, y2 = (int(v) for v in m.groups())
+        if k < len(out):
+            out[k] = (max(0, x1 - pad), max(0, y1 - pad), min(w, x2 + 1 + pad), min(h, y2 + 1 + pad))
+    return out
+
+def safe_zone(caps, boxes, w, h):
+    """Captions that reach into the platform's UI: [(what, clip id)]."""
+    out = []
+    for c, bx in zip(caps, boxes):
+        if not bx:
+            continue
+        x0, y0, x1, y1 = bx
+        into = [f"{side} {round(100 * SAFE_ZONE[side])}% (by {px}px)" for side, px in
+                (("top", round(SAFE_ZONE["top"] * h) - y0), ("bottom", y1 - round((1 - SAFE_ZONE["bottom"]) * h)),
+                 ("left", round(SAFE_ZONE["left"] * w) - x0), ("right", x1 - round((1 - SAFE_ZONE["right"]) * w)))
+                if px > 0]
+        if into:
+            out.append((f"{c['a']:.2f}s {c['text']!r} (clip {c['clip']}) is in the " + ", ".join(into), c["id"]))
+    return out
+
+def product_first(caps, clips, lib, brand, cards=()):
+    """(second, what) the product first shows: the first caption naming the brand, or the first
+    picture from footage with no sound of its own (a screen recording, an insert made for the
+    picture), whichever is earlier. None if neither ever comes. A card isn't an insert."""
+    name = re.sub(r"[^a-z0-9]+", "", (brand or "").lower())
+    found = []
+    t = next((c["a"] for c in caps if name and name in _words_of(c["text"])), None)
+    if t is not None:
+        found.append((t, f"a caption says {brand.capitalize()}"))
+    for c in clips:
+        if c["id"] in cards:
+            continue
+        for f0, f1, p, t0 in cover_plan(c, lib)[0]:
+            it = lib.get((p or c)["media"]) or {}
+            if it.get("has_video") and not it.get("has_audio"):
+                found.append((round(c["at"] + f0 / FPS, 2), f"an insert, {it.get('name')}"))
+                break
+    return min(found, default=None)
+
 def cut_tile(path, frame, out):
     """Nine frames of an export around one frame (4 before, 4 after), numbered: the review
     sheet's picture of a cut finding."""
@@ -3541,7 +3693,8 @@ def check(slug, path=None, actor="cli"):
     for c in (tl or {}).get("clips", []):
         it = st["media"].get(c["media"], {})
         regs = (ensure_speech(c["media"]) if it.get("has_audio") else []) or []
-        clips.append({**c, "at": f / FPS, "end": (f + clip_frames(c)) / FPS, "name": it.get("name"),
+        clips.append({**c, "at": f / FPS, "end": (f + clip_frames(c)) / FPS, "frames": clip_frames(c),
+                      "name": it.get("name"),
                       "regions": regs, "pace": clip_pace(c),
                       "spoken": bool(it.get("has_audio")) and clip_spoken(c, regs)})
         f += clip_frames(c)
@@ -3619,6 +3772,21 @@ def check(slug, path=None, actor="cli"):
              f"{len(short)} cover piece{'s stop' if len(short) != 1 else ' stops'} before its end (the clip's own "
              "picture shows instead; fix: lay it again with footage that lasts, cover less, or uncover)", short)
 
+    # 1c. no shot too short to read (by the same frame plan); a declared card is never a blip
+    as_rendered = {c["id"]: clip_fp(c) for c in (tl or {}).get("clips", [])}
+    cards = {x["clip"] for x in ((st["projects"][slug].get("exceptions") or {}).values())
+             if x.get("kind") == "card" and not x.get("revoked") and x.get("clip")
+             and x.get("fp") == as_rendered.get(x["clip"])}
+    if not tl:
+        rule("blip", "skip", "not a studio render: no frame plan")
+    else:
+        shots = shot_list(tl, st["media"])
+        short = [(f"{x['f0'] / FPS:.2f}-{x['f1'] / FPS:.2f}s (clip {x['clip']}): a {(x['f1'] - x['f0']) / FPS:.2f}s shot "
+                  f"between two picture changes (want >= {BLIP_FRAMES / FPS:g}s): hold it longer, or go straight "
+                  "to the next shot", x["id"]) for x in blips(shots, cards)]
+        rule("blip", not short, f"no shot under {BLIP_FRAMES / FPS:g}s between two picture changes ({len(shots)} shots)"
+             if not short else f"{len(short)} shot{'s' if len(short) != 1 else ''} too short to read", short)
+
     # 2-3. the export's own speech: first word (or declared on-screen text), pauses
     wav = export_wav(final, out_dir / ".audio.wav")
     samples, sr = wav_pcm(wav)
@@ -3649,19 +3817,48 @@ def check(slug, path=None, actor="cli"):
     else:
         rule("pauses", "skip", "no speech in the export")
 
+    # 3b. never digital silence: under a card, between clips, anywhere
+    dead = dead_air(samples, sr)
+    rule("dead air", not dead, f"no silence: the sound never drops under {DEAD_DB:g} dBFS for more than {DEAD_SECS}s"
+         if not dead else f"{len(dead)} stretch{'es' if len(dead) != 1 else ''} of silence (under {DEAD_DB:g} dBFS for "
+         f"more than {DEAD_SECS}s): lay room tone or the last shot's tail under it",
+         [(f"silent {a:.2f}-{b:.2f}s" + (f" (clip {clips.index(c) + 1})" if (c := clip_at((a + b) / 2)) else ""),
+           cid((a + b) / 2)) for a, b in dead])
+
     # 4. length
     lo, hi, most = CHECK_LENGTH
     rule("length", "pass" if lo <= dur <= hi else ("warn" if hi < dur <= most else "fail"),
          f"{dur:.1f}s (want {lo:g}-{hi:g}s; up to {most:g}s only if every beat earns it)")
 
     # 5. loudness
-    li, tp = measure_loudness(final)
+    li, tp, lra = measure_loudness(final)
     if li is None:
         rule("loudness", False, "no sound to measure")
     else:
         ok = abs(li - LOUD_I) <= 1.0 and tp is not None and tp <= LOUD_TP
         rule("loudness", ok, f"{li:.1f} LUFS, true peak {tp if tp is None else round(tp, 1)} dBTP "
                              f"(want {LOUD_I:g} +-1 LUFS, <= {LOUD_TP:g} dBTP)")
+
+    # 5b. every voice at one level: each spoken clip's speech against the median spoken clip's
+    if not tl:
+        rule("level step", "skip", "not a studio render: no clip list")
+    else:
+        lv = [(k, c, gated_loudness(final, [(c["at"] + a, c["at"] + b) for a, b in part_speech(c, c["regions"], c["frames"])]))
+              for k, c in enumerate(clips, 1) if c["spoken"]]
+        lv = [x for x in lv if x[2] is not None]
+        med = sorted(x[2] for x in lv)[len(lv) // 2] if lv else None
+        off = [(f"clip {k} speech at {v:.1f} LUFS, {abs(v - med):.1f} LU {'under' if v < med else 'over'} the "
+                f"median clip ({med:.1f})", c["id"]) for k, c, v in lv if abs(v - med) > LEVEL_STEP]
+        wide = lra is not None and lra > LEVEL_LRA
+        spread = max(x[2] for x in lv) - min(x[2] for x in lv) if lv else 0.0
+        rule("level step", "fail" if off else "warn" if wide else "pass",
+             (f"{len(off)} spoken clip{'s' if len(off) != 1 else ''} more than {LEVEL_STEP:g} LU from the median "
+              "(speech-gated loudness per clip; render levels them, so this is a render from before levelling "
+              "or a clip with too little speech to level)" if off else
+              (f"{len(lv)} spoken clip{'s' if len(lv) != 1 else ''} within {spread:.1f} LU of each other "
+               f"(want each within {LEVEL_STEP:g} LU of the median)" if lv else "no spoken clip to compare"))
+             + (f"; loudness range {lra:.1f} LU" + (f" (over {LEVEL_LRA:g}: quiet and loud parts are far apart)" if wide else "")
+                if lra is not None else ""), off)
 
     # 6. black / frozen picture
     black, frozen, frames = scan_picture(final)
@@ -3702,11 +3899,7 @@ def check(slug, path=None, actor="cli"):
     elif not tl.get("captions", True):
         rule("captions", "skip", "captions are off")
     else:
-        shown = []
-        for c in clips:
-            tr = load_json(mdir(c["media"]) / "transcript.json", {"words": []})
-            shown += [x for ch in caption_chunks(tr.get("words", []), tr.get("segments"), c["in"], c["out"])
-                      for x in _words_of(ch["text"])]
+        shown = [x for ch in caption_plan(clips) for x in _words_of(ch["text"])]
         said = [x for w in heard for x in _words_of(w["w"])]
         import difflib
         sm = difflib.SequenceMatcher(None, shown, said, autojunk=False)
@@ -3716,6 +3909,35 @@ def check(slug, path=None, actor="cli"):
         rule("captions", score >= CHECK_CAPTIONS,
              f"{round(100 * score)}% of words agree ({len(shown)} on screen, {len(said)} heard; "
              f"want >= {round(100 * CHECK_CAPTIONS)}%)", diffs)
+    # 7b. the captions as shown, one by one: with the words, clear of the platform's UI; and
+    # how soon the product shows
+    if not tl:
+        for name in ("caption stray", "safe zone", "product late"):
+            rule(name, "skip", "not a studio render: no caption list")
+    else:
+        caps = caption_plan(clips) if tl.get("captions", True) else []
+        if not tl.get("captions", True):
+            rule("caption stray", "skip", "captions are off")
+            rule("safe zone", "skip", "captions are off")
+        else:
+            bad = caption_stray(caps, heard_regions)
+            rule("caption stray", not bad, f"every caption is with its words ({len(caps)}: in speech, on screen >= "
+                 f"{CAP_SHORT}s, none left up over silence)" if not bad else
+                 f"{len(bad)} of {len(caps)} caption{'s' if len(caps) != 1 else ''} not with the words (fix: trim the "
+                 "clip so the stray word is out, or studio words --fix)", bad)
+            if tl.get("aspect") != "9:16":
+                rule("safe zone", "skip", f"the safe zones are for 9:16 (this is {tl.get('aspect')})")
+            else:
+                w_, h_ = ASPECTS["9:16"]
+                bad = safe_zone(caps, caption_boxes(caps, w_, h_, out_dir), w_, h_)
+                rule("safe zone", not bad, "every caption clear of the top 14%, bottom 20%, left 6% and right 15%"
+                     if not bad else f"{len(bad)} caption{'s' if len(bad) != 1 else ''} under the platform's UI "
+                     "(top 14%, bottom 20%, left 6%, right 15%)", bad)
+        pf = product_first(caps, clips, st["media"], brand, cards)
+        name = (brand or "the product").capitalize()
+        rule("product late", "pass" if pf and pf[0] <= PRODUCT_BY else "warn",
+             (f"{name} first shows at {pf[0]:.2f}s ({pf[1]}; want <= {PRODUCT_BY:g}s)" if pf else
+              f"{name} never shows: no screen insert and no caption naming it"))
     said = [x for w in heard for x in _words_of(w["w"])]
     if said:
         rule("ending", said[-1] not in FILLERS and " ".join(said[-2:]) != "you know",

@@ -10,10 +10,14 @@ check projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (#.9s)  sha
               - clip # out #.00s is inside speech (#-#): it ends at #
   pass  shortest    every spoken piece >= #.5s
   pass  cover short  every cover piece shows to its end (#)
+  FAIL  blip        # shot too short to read
+              - #-#.40s (clip #): a #.90s shot between two picture changes (want >= 1s): hold it longer, or go straight to the next shot
   pass  first word  first word at #.29s (want <= #.5s)
   pass  pauses      longest pause #.00s (want <= #.35s inside speech; clips with no speech are picture, not pauses)
+  pass  dead air    no silence: the sound never drops under -# dBFS for more than #.3s
   pass  length      #.9s (want #-35s; up to 60s only if every beat earns it)
   pass  loudness    -# LUFS, true peak -# dBTP (want -# +-# LUFS, <= -# dBTP)
+  pass  level step  # spoken clips within # LU of each other (want each within # LU of the median); loudness range # LU
   pass  picture     no black or frozen frames
   pass  flash       no stray frames at a cut
   pass  stray       every picture cut is in the timeline
@@ -31,6 +35,9 @@ check projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.mp4  (#.9s)  sha
               - captions 'it and' / audio 'through'
               - captions 'audio never leaves my phone that is' / audio 'job while alright were on site at'
               - captions 'privacy part' / audio 'henderson property'
+  pass  caption stray  every caption is with its words (#: in speech, on screen >= #.4s, none left up over silence)
+  pass  safe zone   every caption clear of the top #%, bottom #%, left #% and right #%
+  warn  product late  Jefe never shows: no screen insert and no caption naming it
   pass  ending      last word 'property.'
 
 review sheet: $STUDIO_HOME/projects/sparks-opener/exports/sparks-opener-<stamp>-9x16.check
@@ -47,7 +54,7 @@ judgment (answer each honestly before telling the operator it's done; a no sends
   #. Not slop. No hype words, no caption confetti (emoji, color flashes, a sound on every word), no rage bait, no app-screen-with-a-pitch ad.
   #. The operator would post it under their name, unchanged. If you're not sure, it fails.
 
-FAIL: cuts, fragment, captions. Fix, render and check again (or, when the picture or the line justifies it, studio exception grant).
+FAIL: cuts, blip, fragment, captions. Fix, render and check again (or, when the picture or the line justifies it, studio exception grant).
 --- stderr
 --- events
 {"data": ["actor", "brand", "excepted", "failed", "failures", "file", "ok", "project", "rules", "sha256", "sheet"], "media": null, "type": "check.done"}
